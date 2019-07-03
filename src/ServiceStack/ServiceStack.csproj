@@ -2,7 +2,7 @@
   <PropertyGroup>
     <PackageId>ServiceStack</PackageId>
     <AssemblyName>ServiceStack</AssemblyName>
-    <TargetFrameworks>net45;netstandard2.0</TargetFrameworks>
+    <TargetFrameworks>netstandard2.0</TargetFrameworks>
     <Title>ServiceStack webservice framework: Faster, Cleaner, Modern WCF alternative</Title>
     <PackageDescription>
       ServiceStack is a simple and fast alternative to WCF, MVC and Web API in one cohesive framework for all your services
@@ -19,7 +19,6 @@
     <ProjectReference Include="..\ServiceStack.Interfaces\ServiceStack.Interfaces.csproj" />
     <ProjectReference Include="..\ServiceStack.Client\ServiceStack.Client.csproj" />
     <ProjectReference Include="..\ServiceStack.Common\ServiceStack.Common.csproj" />
-    <PackageReference Include="ServiceStack.Text" Version="$(Version)" />
   </ItemGroup>
   <ItemGroup Condition=" '$(TargetFramework)' == 'net45' ">
     <Reference Include="System.Net" />
