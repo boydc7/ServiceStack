@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
@@ -12,10 +13,12 @@ namespace ServiceStack
 {
     public interface IGistGateway
     {
-        Gist CreateGist(string description, bool isPublic, Dictionary<string, string> gistFiles);
+        Gist CreateGist(string description, bool isPublic, Dictionary<string, object> files);
+        Gist CreateGist(string description, bool isPublic, Dictionary<string, string> textFiles);
         Gist GetGist(string gistId);
         Task<Gist> GetGistAsync(string gistId);
-        void WriteGistFiles(string gistId, Dictionary<string, string> files);
+        void WriteGistFiles(string gistId, Dictionary<string, object> files);
+        void WriteGistFiles(string gistId, Dictionary<string, string> textFiles);
         void CreateGistFile(string gistId, string filePath, string contents);
         void WriteGistFile(string gistId, string filePath, string contents);
         void DeleteGistFiles(string gistId, params string[] filePaths);
@@ -25,7 +28,6 @@ namespace ServiceStack
     {
         public string UserAgent { get; set; } = nameof(GitHubGateway);
         public string BaseUrl { get; set; } = "https://api.github.com/";
-        public bool UseForkParent { get; set; } = true;
 
         /// <summary>
         /// AccessTokenSecret
@@ -40,18 +42,15 @@ namespace ServiceStack
         public GitHubGateway() {}
         public GitHubGateway(string accessToken) => AccessToken = accessToken;
 
-        public virtual string UnwrapRepoFullName(string orgName, string name)
+        internal string UnwrapRepoFullName(string orgName, string name, bool useFork=false)
         {
             try
             {
                 var repo = GetJson<GithubRepo>($"/repos/{orgName}/{name}");
-                if (repo.Fork)
+                if (useFork && repo.Fork)
                 {
-                    if (repo.Fork && UseForkParent)
-                    {
-                        if (repo.Parent != null)
-                            return repo.Parent.Full_Name;
-                    }
+                    if (repo.Parent != null)
+                        return repo.Parent.Full_Name;
                 }
 
                 return repo.Full_Name;
@@ -64,11 +63,11 @@ namespace ServiceStack
             }
         }
 
-        public virtual Tuple<string,string> FindRepo(string[] orgs, string name)
+        public virtual Tuple<string,string> FindRepo(string[] orgs, string name, bool useFork=false)
         {
             foreach (var orgName in orgs)
             {
-                var repoFullName = UnwrapRepoFullName(orgName, name);
+                var repoFullName = UnwrapRepoFullName(orgName, name, useFork);
                 if (repoFullName == null)
                     continue;
 
@@ -134,6 +133,9 @@ namespace ServiceStack
 
             return map.Values.ToList();
         }
+        
+        public virtual GithubRepo GetRepo(string userOrOrg, string repo) =>
+            GetJson<GithubRepo>($"/{userOrOrg}/{repo}");
 
         public virtual List<GithubRepo> GetUserRepos(string githubUser) =>
             StreamJsonCollection<List<GithubRepo>>($"users/{githubUser}/repos").SelectMany(x => x).ToList();
@@ -283,11 +285,17 @@ namespace ServiceStack
 
             return response;
         }
+        
+        public virtual Gist CreateGist(string description, bool isPublic, Dictionary<string, object> files) =>
+            CreateGithubGist(description, isPublic, files);
+        
+        public virtual Gist CreateGist(string description, bool isPublic, Dictionary<string, string> textFiles) =>
+            CreateGithubGist(description, isPublic, textFiles);
 
-        public virtual Gist CreateGist(string description, bool isPublic, Dictionary<string, string> gistFiles) =>
-            CreateGithubGist(description, isPublic, gistFiles);
+        public virtual GithubGist CreateGithubGist(string description, bool isPublic, Dictionary<string, object> files) =>
+            CreateGithubGist(description, isPublic, ToTextFiles(files));
 
-        public virtual GithubGist CreateGithubGist(string description, bool isPublic, Dictionary<string, string> files)
+        public virtual GithubGist CreateGithubGist(string description, bool isPublic, Dictionary<string, string> textFiles)
         {
             AssertAccessToken();
             
@@ -299,7 +307,7 @@ namespace ServiceStack
                 .Append(",\"files\":{");
             
             var i = 0;
-            foreach (var entry in files)
+            foreach (var entry in textFiles)
             {
                 if (i++ > 0)
                     sb.Append(",");
@@ -319,17 +327,83 @@ namespace ServiceStack
             var response = responseJson.FromJson<GithubGist>();
             return response;
         }
+
+        public static bool IsDirSep(char c) => c == '\\' || c == '/';
+
+        internal static string SanitizePath(string filePath)
+        {
+            var sanitizedPath = string.IsNullOrEmpty(filePath)
+                ? null
+                : (IsDirSep(filePath[0]) ? filePath.Substring(1) : filePath);
+
+            return sanitizedPath?.Replace('/', '\\');
+        }
+
+        internal static string ToBase64(byte[] bytes) => Convert.ToBase64String(bytes);
+        internal static string ToBase64(Stream stream)
+        {
+            var base64 = stream is MemoryStream ms
+                ? Convert.ToBase64String(ms.GetBuffer(), 0, (int) ms.Length)
+                : Convert.ToBase64String(stream.ReadFully());
+            return base64;
+        }
+
+        public static Dictionary<string, string> ToTextFiles(Dictionary<string, object> files)
+        {
+            string ToBase64ThenDispose(Stream stream)
+            {
+                using (stream)
+                    return ToBase64(stream);
+            }
+
+            var gistFiles = new Dictionary<string, string>();
+            foreach (var entry in files)
+            {
+                if (entry.Value == null)
+                    continue;
+
+                var filePath = SanitizePath(entry.Key);
+
+                var base64 = entry.Value is string
+                    ? null
+                    : entry.Value is byte[] bytes
+                        ? ToBase64(bytes)
+                        : entry.Value is Stream stream
+                            ? ToBase64ThenDispose(stream)
+                            : entry.Value is IVirtualFile file &&
+                              MimeTypes.IsBinary(MimeTypes.GetMimeType(file.Extension))
+                                ? ToBase64(file.ReadAllBytes())
+                                : null;
+
+                if (base64 != null)
+                    filePath += "|base64";
+
+                var textContents = base64 ??
+                   (entry.Value is string text
+                       ? text
+                       : throw CreateContentNotSupportedException(entry.Value));
+
+                gistFiles[filePath] = textContents;
+            }
+            return gistFiles;
+        }
+
+        internal static NotSupportedException CreateContentNotSupportedException(object value) =>
+            new NotSupportedException($"Could not write '{value?.GetType().Name ?? "null"}' value. Only string, byte[], Stream or IVirtualFile content is supported.");
+
+        public virtual void WriteGistFiles(string gistId, Dictionary<string, object> files) =>
+            WriteGistFiles(gistId, ToTextFiles(files));
         
         /// <summary>
         /// Create or Write Gist Text Files. Requires AccessToken
         /// </summary>
-        public virtual void WriteGistFiles(string gistId, Dictionary<string,string> files)
+        public virtual void WriteGistFiles(string gistId, Dictionary<string,string> textFiles)
         {
             AssertAccessToken();
 
             var i = 0;
             var sb = StringBuilderCache.Allocate().Append("{\"files\":{");
-            foreach (var entry in files)
+            foreach (var entry in textFiles)
             {
                 if (i++ > 0)
                     sb.Append(",");

@@ -256,7 +256,7 @@ namespace ServiceStack
     public class NavOptions
     {
         /// <summary>
-        /// Attributes which define this view, e.g:
+        /// User Attributes for conditional rendering, e.g:
         ///  - auth - User is Authenticated
         ///  - role:name - User Role
         ///  - perm:name - User Permission 
@@ -274,6 +274,9 @@ namespace ServiceStack
         /// </summary>
         public string BaseHref { get; set; }
 
+        /// <summary>
+        /// Custom classes applied to different navigation elements (defaults to Bootstrap classes)
+        /// </summary>
         public string NavClass { get; set; } = NavDefaults.NavClass;
         public string NavItemClass { get; set; } = NavDefaults.NavItemClass;
         public string NavLinkClass { get; set; } = NavDefaults.NavLinkClass;
@@ -284,6 +287,17 @@ namespace ServiceStack
         public string ChildNavMenuItemClass { get; set; } = NavDefaults.ChildNavMenuItemClass;
     }
 
+    /// <summary>
+    /// Public API for ViewUtils
+    /// </summary>
+    public static class View
+    {
+        public static List<NavItem> NavItems => ViewUtils.NavItems;
+        public static Dictionary<string, List<NavItem>> NavItemsMap => ViewUtils.NavItemsMap;
+        public static void Load(IAppSettings settings) => ViewUtils.Load(settings);
+
+        public static List<NavItem> GetNavItems(string key) => ViewUtils.GetNavItems(key);
+    }
 
     /// <summary>
     /// Shared Utils shared between different Template Filters and Razor Views/Helpers
@@ -549,7 +563,8 @@ namespace ServiceStack
                 sb.Append(" id=\"").Append(navItem.Id).Append("\"");
 
             sb.Append(">")
-                .Append(navItem.IconHtml)
+                .Append(!string.IsNullOrEmpty(navItem.IconClass) 
+                    ? $"<i class=\"{navItem.IconClass}\"></i>" : "")
                 .Append(navItem.Label)
                 .AppendLine("</a>");
         }

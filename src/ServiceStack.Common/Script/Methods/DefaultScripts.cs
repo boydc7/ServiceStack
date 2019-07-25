@@ -40,9 +40,9 @@ namespace ServiceStack.Script
             return to;
         }
 
-        public object times(int count) => AssertWithinMaxQuota(count).Times().ToList();
-        public object range(int count) => Enumerable.Range(0, AssertWithinMaxQuota(count));
-        public object range(int start, int count) => Enumerable.Range(start, AssertWithinMaxQuota(count));
+        public List<int> times(int count) => AssertWithinMaxQuota(count).Times().ToList();
+        public IEnumerable<int> range(int count) => Enumerable.Range(0, AssertWithinMaxQuota(count));
+        public IEnumerable<int> range(int start, int count) => Enumerable.Range(start, AssertWithinMaxQuota(count));
 
         public bool isEven(int value) => value % 2 == 0;
         public bool isOdd(int value) => !isEven(value);
@@ -492,6 +492,10 @@ namespace ServiceStack.Script
             return collection;
         }
 
+        /// <summary>
+        /// Puts value in dictionary at key  
+        /// </summary>
+        /// <returns>value</returns>
         public object putItem(IDictionary dictionary, object key, object value)
         {
             if (dictionary == null)
@@ -499,7 +503,7 @@ namespace ServiceStack.Script
 
             dictionary[key] = value;
 
-            return dictionary;
+            return value;
         }
 
         private static bool TryAddToCollection(object collection, object value)
@@ -692,8 +696,8 @@ namespace ServiceStack.Script
             await scope.WritePageAsync(page, codePage, pageParams);
         }
 
-        public Task forEach(ScriptScopeContext scope, object target, object items) => forEach(scope, target, items, null);
-        public async Task forEach(ScriptScopeContext scope, object target, object items, object scopeOptions)
+        public Task selectEach(ScriptScopeContext scope, object target, object items) => selectEach(scope, target, items, null);
+        public async Task selectEach(ScriptScopeContext scope, object target, object items, object scopeOptions)
         {
             if (items is IEnumerable objs)
             {
@@ -709,7 +713,7 @@ namespace ServiceStack.Script
             }
             else if (items != null)
             {
-                throw new ArgumentException($"{nameof(forEach)} in '{scope.Page.VirtualPath}' requires an IEnumerable, but received a '{items.GetType().Name}' instead");
+                throw new ArgumentException($"{nameof(selectEach)} in '{scope.Page.VirtualPath}' requires an IEnumerable, but received a '{items.GetType().Name}' instead");
             }
         }
 
