@@ -30,9 +30,20 @@ namespace ServiceStack.Host
         {
             foreach (var mi in serviceType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (mi.IsGenericMethod || mi.GetParameters().Length != 1)
+                try
+                {
+                    if (mi.IsGenericMethod || mi.GetParameters().Length != 1)
+                        continue;
+                }
+                catch(TargetInvocationException)
+                {
                     continue;
-                
+                }
+                catch(BadImageFormatException)
+                {
+                    continue;
+                }
+
                 var paramType = mi.GetParameters()[0].ParameterType;
                 if (paramType.IsValueType || paramType == typeof(string))
                     continue;
