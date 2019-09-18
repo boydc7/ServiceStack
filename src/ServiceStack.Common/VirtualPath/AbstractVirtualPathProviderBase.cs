@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using ServiceStack.IO;
+using ServiceStack.Text;
 
 namespace ServiceStack.VirtualPath
 {
@@ -112,26 +113,101 @@ namespace ServiceStack.VirtualPath
         protected NotSupportedException CreateContentNotSupportedException(object value) =>
             new NotSupportedException($"Could not write '{value?.GetType().Name ?? "null"}' value. Only string, byte[], Stream or IVirtualFile content is supported.");
 
-        public virtual void WriteFiles(Dictionary<string, object> files)
+        public virtual void WriteFile(string path, ReadOnlyMemory<char> text)
         {
-            var vfs = this as IVirtualFiles;
-            if (vfs == null)
+            if (!(this is IVirtualFiles vfs))
+                throw new NotSupportedException($"{GetType().Name} does not implement IVirtualFiles");
+
+            vfs.WriteFile(path, text.ToString());
+        }
+        
+        public virtual void WriteFile(string path, ReadOnlyMemory<byte> bytes)
+        {
+            if (!(this is IVirtualFiles vfs))
+                throw new NotSupportedException($"{GetType().Name} does not implement IVirtualFiles");
+
+            vfs.WriteFile(path, MemoryProvider.Instance.ToMemoryStream(bytes.Span));
+        }
+        
+        public virtual void WriteFile(string path, object contents)
+        {
+            if (!(this is IVirtualFiles vfs))
                 throw new NotSupportedException($"{GetType().Name} does not implement IVirtualFiles");
             
+            if (contents == null)
+                return;
+
+            if (contents is IVirtualFile vfile)
+                WriteFile(path, vfile.GetContents());
+            else if (contents is string textContents)
+                vfs.WriteFile(path, textContents);
+            else if (contents is ReadOnlyMemory<char> romChars)
+                WriteFile(path, romChars);
+            else if (contents is byte[] binaryContents)
+            {
+                using (var ms = MemoryStreamFactory.GetStream(binaryContents))
+                {
+                    vfs.WriteFile(path, ms);
+                }
+            }
+            else if (contents is ReadOnlyMemory<byte> romBytes)
+                WriteFile(path, romBytes);
+            else if (contents is Stream stream)
+                vfs.WriteFile(path, stream);
+            else
+                throw CreateContentNotSupportedException(contents);
+        }
+        
+        public virtual void AppendFile(string path, ReadOnlyMemory<char> text)
+        {
+            if (!(this is IVirtualFiles vfs))
+                throw new NotSupportedException($"{GetType().Name} does not implement IVirtualFiles");
+
+            vfs.AppendFile(path, text.ToString());
+        }
+        
+        public virtual void AppendFile(string path, ReadOnlyMemory<byte> bytes)
+        {
+            if (!(this is IVirtualFiles vfs))
+                throw new NotSupportedException($"{GetType().Name} does not implement IVirtualFiles");
+
+            vfs.AppendFile(path, MemoryProvider.Instance.ToMemoryStream(bytes.Span));
+        }
+
+        public virtual void AppendFile(string path, object contents)
+        {
+            if (!(this is IVirtualFiles vfs))
+                throw new NotSupportedException($"{GetType().Name} does not implement IVirtualFiles");
+            
+            if (contents == null)
+                return;
+
+            if (contents is IVirtualFile vfile)
+                AppendFile(path, vfile.GetContents());
+            else if (contents is string textContents)
+                vfs.AppendFile(path, textContents);
+            else if (contents is ReadOnlyMemory<char> romChars)
+                AppendFile(path, romChars);
+            else if (contents is byte[] binaryContents)
+            {
+                using (var ms = MemoryStreamFactory.GetStream(binaryContents))
+                {
+                    vfs.AppendFile(path, ms);
+                }
+            }
+            else if (contents is ReadOnlyMemory<byte> romBytes)
+                AppendFile(path, romBytes);
+            else if (contents is Stream stream)
+                vfs.AppendFile(path, stream);
+            else
+                throw CreateContentNotSupportedException(contents);
+        }
+
+        public virtual void WriteFiles(Dictionary<string, object> files)
+        {
             foreach (var entry in files)
             {
-                if (entry.Value == null)
-                    continue;
-                if (entry.Value is IVirtualFile vfile)
-                    vfs.WriteFile(vfile, entry.Key);
-                else if (entry.Value is string textContents)
-                    vfs.WriteFile(entry.Key, textContents);
-                else if (entry.Value is byte[] binaryContents)
-                    vfs.WriteFile(entry.Key, binaryContents);
-                else if (entry.Value is Stream stream)
-                    vfs.WriteFile(entry.Key, stream);
-                else
-                    throw CreateContentNotSupportedException(entry.Value);
+                WriteFile(entry.Key, entry.Value);
             }
         }
     }

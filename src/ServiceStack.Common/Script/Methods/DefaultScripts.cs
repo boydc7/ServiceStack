@@ -12,9 +12,56 @@ namespace ServiceStack.Script
 {
     // ReSharper disable InconsistentNaming
     
-    public partial class DefaultScripts : ScriptMethods
+    public partial class DefaultScripts : ScriptMethods, IConfigureScriptContext
     {
-        public static DefaultScripts Instance = new DefaultScripts();
+        public static readonly DefaultScripts Instance = new DefaultScripts();
+        
+        public static List<string> RemoveNewLinesFor { get; } = new List<string> {
+            nameof(to),
+            nameof(assignTo),
+            nameof(assignToGlobal),
+            nameof(assignError),
+            nameof(addTo),
+            nameof(addToGlobal),
+            nameof(addToStart),
+            nameof(addToStartGlobal),
+            nameof(appendTo),
+            nameof(appendToGlobal),
+            nameof(prependTo),
+            nameof(prependToGlobal),
+            nameof(forEach),
+            nameof(@do),
+            nameof(end),
+            nameof(@throw),
+            nameof(ifthrow),
+            nameof(throwIf),
+            nameof(throwIf),
+            nameof(ifThrowArgumentException),
+            nameof(ifThrowArgumentNullException),
+            nameof(throwArgumentNullExceptionIf),
+            nameof(throwArgumentException),
+            nameof(throwArgumentNullException),
+            nameof(throwNotSupportedException),
+            nameof(throwNotImplementedException),
+            nameof(throwUnauthorizedAccessException),
+            nameof(throwFileNotFoundException),
+            nameof(throwOptimisticConcurrencyException),
+            nameof(throwNotSupportedException),
+            nameof(ifError),
+            nameof(skipExecutingFiltersOnError),
+            nameof(continueExecutingFiltersOnError),
+        };
+        
+        public static List<string> EvaluateWhenSkippingFilterExecution = new List<string> {
+            nameof(ifError),
+            nameof(lastError),
+        };
+
+        public void Configure(ScriptContext context)
+        {
+            RemoveNewLinesFor.Each(name => context.RemoveNewLineAfterFiltersNamed.Add(name));
+            EvaluateWhenSkippingFilterExecution.Each(name => context.OnlyEvaluateFiltersWhenSkippingPageFilterExecution.Add(name));
+        }
 
         // methods without arguments can be used in bindings, e.g. {{ now | dateFormat }}
         public DateTime now() => DateTime.Now;
@@ -330,6 +377,7 @@ namespace ServiceStack.Script
         public IRawString pass(string target) => ("{{ " + target + " }}").ToRawString();
 
         public IEnumerable join(IEnumerable<object> values) => join(values, ",");
+        public IEnumerable joinln(IEnumerable<object> values) => join(values, "\n");
         public IEnumerable join(IEnumerable<object> values, string delimiter) => values.Map(x => x.AsString()).Join(delimiter);
 
         public IEnumerable<object> reverse(ScriptScopeContext scope, IEnumerable<object> original) => original.Reverse();
@@ -610,6 +658,15 @@ namespace ServiceStack.Script
             return IgnoreResult.Value;
         }
 
+        // Shorter Alias for assignToGlobal:
+        public IgnoreResult toGlobal(ScriptScopeContext scope, object value, object argExpr)
+        {
+            var varName = GetVarNameFromStringOrArrowExpression(nameof(toGlobal), argExpr);
+            
+            scope.PageResult.Args[varName] = value;
+            return IgnoreResult.Value;
+        }
+
         public IgnoreResult assignToGlobal(ScriptScopeContext scope, object value, object argExpr)
         {
             var varName = GetVarNameFromStringOrArrowExpression(nameof(assignToGlobal), argExpr);
@@ -624,6 +681,10 @@ namespace ServiceStack.Script
 
         public Task assignTo(ScriptScopeContext scope, object argExpr) =>
             assignToArgs(scope, nameof(assignTo), argExpr, scope.ScopedParams);
+
+        // Shorter Alias for assignToGlobal:
+        public Task toGlobal(ScriptScopeContext scope, object argExpr) =>
+            assignToArgs(scope, nameof(toGlobal), argExpr, scope.PageResult.Args);
 
         public Task assignToGlobal(ScriptScopeContext scope, object argExpr) =>
             assignToArgs(scope, nameof(assignToGlobal), argExpr, scope.PageResult.Args);
@@ -835,9 +896,9 @@ namespace ServiceStack.Script
 
         public int AssertWithinMaxQuota(int value)
         {
-            var maxQuota = (int)Context.Args[ScriptConstants.MaxQuota];
+            var maxQuota = Context.MaxQuota;
             if (value > maxQuota)
-                throw new NotSupportedException($"{value} exceeds Max Quota of {maxQuota}");
+                throw new NotSupportedException($"{value} exceeds Max Quota of {maxQuota}. \nMaxQuota can be changed in `ScriptContext.MaxQuota`.");
 
             return value;
         }
@@ -852,6 +913,8 @@ namespace ServiceStack.Script
         }
 
         public IRawString typeName(object target) => (target?.GetType().Name ?? "null").ToRawString();
+        public IRawString typeFullName(object target) => 
+            (target != null ? Context.ProtectedMethods.typeQualifiedName(target.GetType()) : "null").ToRawString();
 
         public IEnumerable of(ScriptScopeContext scope, IEnumerable target, object scopeOptions)
         {
@@ -1308,6 +1371,7 @@ namespace ServiceStack.Script
             return to;
         }
 
+        public object merge(object sources) => merge(new Dictionary<string, object>(), sources);
         public object merge(IDictionary<string, object> target, object sources)
         {
             var srcArray = sources is IDictionary<string, object> d
@@ -1376,7 +1440,35 @@ namespace ServiceStack.Script
                 return result;
             }
         }
-   }
+
+        public IgnoreResult write(ScriptScopeContext scope, object value)
+        {
+            if (value != null)
+            {
+                var s = value.ToString();
+                MemoryProvider.Instance.Write(scope.OutputStream, s.AsMemory());
+            }
+            return IgnoreResult.Value;
+        }
+
+        public IgnoreResult writeln(ScriptScopeContext scope, object value)
+        {
+            if (value != null)
+            {
+                var s = $"{value}\n";
+                MemoryProvider.Instance.Write(scope.OutputStream, s.AsMemory());
+            }
+            return IgnoreResult.Value;
+        }
+
+        public object unwrap(object value)
+        {
+            if (value is Task t)
+                return t.GetResult();
+
+            return value;
+        }
+    }
 
     public partial class DefaultScripts //Methods named after common keywords breaks intelli-sense when trying to use them        
     {
@@ -1389,11 +1481,7 @@ namespace ServiceStack.Script
         
         public StopExecution @return(ScriptScopeContext scope) => @return(scope, null, null);
         public StopExecution @return(ScriptScopeContext scope, object returnValue) => @return(scope, returnValue, null);
-        public StopExecution @return(ScriptScopeContext scope, object returnValue, Dictionary<string, object> returnArgs)
-        {
-            scope.PageResult.ReturnValue = new ReturnValue(returnValue, returnArgs); 
-            scope.PageResult.HaltExecution = true;
-            return StopExecution.Value;
-        }
+        public StopExecution @return(ScriptScopeContext scope, object returnValue, Dictionary<string, object> returnArgs) =>
+            scope.ReturnValue(returnValue, returnArgs);
     }
 }

@@ -64,17 +64,26 @@ namespace ServiceStack
     /// </summary>
     public abstract class ModularStartup : IStartup
     {
+        public static ModularStartup Instance { get; protected set;  } 
+        /// <summary>
+        /// Which Startup Types not to load 
+        /// </summary>
+        public List<Type> IgnoreTypes { get; set; } = new List<Type>();
+        
         public List<Assembly> ScanAssemblies { get; }
 
         public IConfiguration Configuration { get; }
         
         public Func<IEnumerable<Type>> TypeResolver { get; }
+        
+        public List<object> LoadedConfigurations { get; set; } = new List<object>();
 
         /// <summary>
         /// Scan Types in Assemblies for Startup configuration classes
         /// </summary>
         protected ModularStartup(IConfiguration configuration, params Assembly[] assemblies)
         {
+            Instance = this;
             Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
             ScanAssemblies = new List<Assembly>(assemblies) { GetType().Assembly };
             TypeResolver = () => ScanAssemblies.Distinct().SelectMany(x => x.GetTypes());
@@ -112,6 +121,11 @@ namespace ServiceStack
                 requiresConfig.Configuration = Configuration;
             return instance;
         }
+        
+        /// <summary>
+        /// Whether to load the Startup Type or not, allows all Startup Types not in IgnoreTypes by default
+        /// </summary>
+        public virtual bool LoadType(Type startupType) => !IgnoreTypes.Contains(startupType);
 
         private List<Tuple<object,int>> priorityInstances;
         public List<Tuple<object,int>> GetPriorityInstances()
@@ -119,12 +133,13 @@ namespace ServiceStack
             if (priorityInstances == null)
             {
                 var types = TypeResolver().Where(x =>
-                    !typeof(ModularStartup).IsAssignableFrom(x) // exclude self 
+                    !typeof(ModularStartup).IsAssignableFrom(x) // exclude self
                     && (
                         x.HasInterface(typeof(IStartup)) ||
                         x.HasInterface(typeof(IConfigureServices)) ||
                         x.HasInterface(typeof(IConfigureApp)))
-                    );
+                    && LoadType(x)
+                );
 
                 priorityInstances = new List<Tuple<object,int>>();
                 foreach (var type in types)
@@ -143,9 +158,15 @@ namespace ServiceStack
             void RunConfigure(object instance)
             {
                 if (instance is IConfigureServices config)
+                {
                     config.Configure(services);
+                    LoadedConfigurations.Add(instance);
+                }
                 else if (instance is IStartup startup)
+                {
                     startup.ConfigureServices(services);
+                    LoadedConfigurations.Add(instance);
+                }
             }
             
             var startupConfigs = GetPriorityInstances();
@@ -171,9 +192,15 @@ namespace ServiceStack
             void RunConfigure(object instance)
             {
                 if (instance is IConfigureApp config)
+                {
                     config.Configure(app);
+                    LoadedConfigurations.Add(instance);
+                }
                 else if (instance is IStartup startup)
+                {
                     startup.Configure(app);
+                    LoadedConfigurations.Add(instance);
+                }
             }
             
             var startupConfigs = GetPriorityInstances();

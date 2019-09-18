@@ -24,6 +24,29 @@ namespace ServiceStack
         /// </summary>
         public Func<IRequest, IHttpResult> OnAuthenticateValidate { get; set; }
 
+        /// <summary>
+        /// Custom Validation Function in AuthenticateService 
+        /// </summary>
+        public ValidateFn ValidateFn { get; set; }
+
+        public Action<IRequest, string> ValidateRedirectLinks { get; set; } = NoExternalRedirects;
+
+        public static void AllowAllRedirects(IRequest req, string redirect) {}
+        public static void NoExternalRedirects(IRequest req, string redirect)
+        {
+            redirect = redirect?.Trim();
+            if (string.IsNullOrEmpty(redirect))
+                return;
+
+            if (redirect.StartsWith("//") || redirect.IndexOf("://", StringComparison.Ordinal) >= 0)
+            {
+                if (redirect.StartsWith(req.GetBaseUrl()))
+                    return;
+                
+                throw new ArgumentException(ErrorMessages.NoExternalRedirects, nameof(Authenticate.Continue));
+            }
+        }
+
         private readonly Func<IAuthSession> sessionFactory;
         private IAuthProvider[] authProviders;
         public IAuthProvider[] AuthProviders => authProviders;
@@ -225,6 +248,8 @@ namespace ServiceStack
             AuthenticateService.HtmlRedirectReturnParam = HtmlRedirectReturnParam;
             AuthenticateService.HtmlRedirectReturnPathOnly = HtmlRedirectReturnPathOnly;            
             AuthenticateService.AuthResponseDecorator = AuthResponseDecorator;
+            if (ValidateFn != null)
+                AuthenticateService.ValidateFn = ValidateFn;
 
             var authNavItems = AuthProviders.Select(x => (x as AuthProvider)?.NavItem).Where(x => x != null);
             if (!ViewUtils.NavItemsMap.TryGetValue("auth", out var navItems))

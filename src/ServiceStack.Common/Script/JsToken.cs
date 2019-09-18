@@ -46,10 +46,13 @@ namespace ServiceStack.Script
         private static readonly byte[] ValidVarNameChars;
         private static readonly byte[] OperatorChars;
         private static readonly byte[] ExpressionTerminatorChars;
+        public static readonly byte[] NewLineUtf8;
+
         private const byte True = 1;
         
         static JsTokenUtils()
         {
+            NewLineUtf8 = new byte[] { 10 }; // UTF8.GetBytes("\n");
             var n = new byte['e' + 1];
             n['0'] = n['1'] = n['2'] = n['3'] = n['4'] = n['5'] = n['6'] = n['7'] = n['8'] = n['9'] = n['.'] = True;
             ValidNumericChars = n;
@@ -170,6 +173,31 @@ namespace ServiceStack.Script
         
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsEnd(this char c) => c == default(char);
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ReadOnlyMemory<char> Chop(this ReadOnlyMemory<char> literal, char c) => 
+            literal.IsEmpty || literal.Span[literal.Length -1] != c 
+                ? literal
+                : literal.Slice(0, literal.Length - 1);
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ReadOnlySpan<char> Chop(this ReadOnlySpan<char> literal, char c) => 
+            literal.IsEmpty || literal[literal.Length -1] != c 
+                ? literal
+                : literal.Slice(0, literal.Length - 1);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ReadOnlyMemory<char> ChopNewLine(this ReadOnlyMemory<char> literal)
+        {
+            var lastChar = literal.SafeGetChar(literal.Length - 1);
+            if (lastChar == '\r' || lastChar == '\n')
+            {
+                return literal.Span.SafeCharEquals(literal.Length - 2, '\r')
+                    ? literal.Slice(0, literal.Length - 2)
+                    : literal.Slice(0, literal.Length - 1);
+            }
+            return literal;
+        }
 
         // Remove `Js` prefix
         public static string ToJsAstType(this Type type) => type.Name.Substring(2);
@@ -221,7 +249,7 @@ namespace ServiceStack.Script
         }
 
         /// <summary>
-        /// Evaulate if result can be async, if so converts async result to Task&lt;object&gt; otherwise wraps result in a Task
+        /// Evaluate if result can be async, if so converts async result to Task&lt;object&gt; otherwise wraps result in a Task
         /// </summary>
         public static async Task<bool> EvaluateToBoolAsync(this JsToken token, ScriptScopeContext scope)
         {
@@ -233,7 +261,7 @@ namespace ServiceStack.Script
         }
 
         /// <summary>
-        /// Evaulate if result can be async, if so converts async result to Task&lt;object&gt; otherwise wraps result in a Task
+        /// Evaluate if result can be async, if so converts async result to Task&lt;object&gt; otherwise wraps result in a Task
         /// </summary>
         public static bool EvaluateToBool(this JsToken token, ScriptScopeContext scope, out bool? result, out Task<bool> asyncResult)
         {
@@ -256,7 +284,7 @@ namespace ServiceStack.Script
         }
 
         /// <summary>
-        /// Evaulate if result can be async, if so converts async result to Task&lt;object&gt; otherwise wraps result in a Task
+        /// Evaluate if result can be async, if so converts async result to Task&lt;object&gt; otherwise wraps result in a Task
         /// </summary>
         public static Task<object> EvaluateAsync(this JsToken token, ScriptScopeContext scope)
         {
@@ -321,37 +349,35 @@ namespace ServiceStack.Script
                     return literal;
                 }
 
-                if (literal.FirstCharEquals(',') && bracketsExpr is JsIdentifier param1) // (a,b,c) => ...
-                {
-                    literal = literal.Advance(1);
-                    var args = new List<JsIdentifier> { param1, };
-                    while (true)
-                    {
-                        literal = literal.AdvancePastWhitespace();
-                        literal = literal.ParseIdentifier(out var arg);
-                        if (!(arg is JsIdentifier param))
-                            throw new SyntaxErrorException($"Expected identifier but was instead '{arg.DebugToken()}', near: {literal.DebugLiteral()}");
-
-                        args.Add(param);
-
-                        literal = literal.AdvancePastWhitespace();
-                        
-                        if (literal.FirstCharEquals(')'))
-                            break;
-                        
-                        if (!literal.FirstCharEquals(','))
-                            throw new SyntaxErrorException($"Expected ',' or ')' but was instead '{literal.DebugFirstChar()}', near: {literal.DebugLiteral()}");
-                            
-                        literal = literal.Advance(1);
-                    }
-
-                    literal = literal.Advance(1);
-                    literal = literal.ParseArrowExpressionBody(args.ToArray(), out var expr);
-                    token = expr;
-                    return literal;
-                }
+                if (!literal.FirstCharEquals(',') || !(bracketsExpr is JsIdentifier param1))
+                    throw new SyntaxErrorException($"Expected ')' but instead found {literal.DebugFirstChar()} near: {literal.DebugLiteral()}");
                 
-                throw new SyntaxErrorException($"Expected ')' but instead found {literal.DebugFirstChar()} near: {literal.DebugLiteral()}");
+                literal = literal.Advance(1);
+                var args = new List<JsIdentifier> { param1, };
+                while (true)
+                {
+                    literal = literal.AdvancePastWhitespace();
+                    literal = literal.ParseIdentifier(out var arg);
+                    if (!(arg is JsIdentifier param))
+                        throw new SyntaxErrorException($"Expected identifier but was instead '{arg.DebugToken()}', near: {literal.DebugLiteral()}");
+
+                    args.Add(param);
+
+                    literal = literal.AdvancePastWhitespace();
+                        
+                    if (literal.FirstCharEquals(')'))
+                        break;
+                        
+                    if (!literal.FirstCharEquals(','))
+                        throw new SyntaxErrorException($"Expected ',' or ')' but was instead '{literal.DebugFirstChar()}', near: {literal.DebugLiteral()}");
+                            
+                    literal = literal.Advance(1);
+                }
+
+                literal = literal.Advance(1);
+                literal = literal.ParseArrowExpressionBody(args.ToArray(), out var expr);
+                token = expr;
+                return literal;
             }
 
             token = null;
@@ -367,27 +393,10 @@ namespace ServiceStack.Script
             if (firstChar == '\'' || firstChar == '"' || firstChar == '`' || firstChar == '′')
             {
                 var quoteChar = firstChar;
-                i = 1;
-                var hasEscapeChar = false;
-                
-                while (i < literal.Length)
-                {
-                    c = literal[i];
-                    if (c == quoteChar)
-                    {
-                        if (!literal.SafeCharEquals(i - 1,'\\') ||
-                            (literal.SafeCharEquals(i - 2,'\\') && !literal.SafeCharEquals(i - 3,'\\')))
-                            break;
-                    }
-                    
-                    i++;
-                    if (!hasEscapeChar)
-                        hasEscapeChar = c == '\\';
-                }
-
-                if (i >= literal.Length || literal[i] != quoteChar)
+                i = literal.IndexOfQuotedString(quoteChar, out var hasEscapeChar);
+                if (i == -1)
                     throw new SyntaxErrorException($"Unterminated string literal: {literal.ToString()}");
-
+                
                 var rawString = literal.Slice(1, i - 1);
 
                 if (quoteChar == '`')
@@ -563,6 +572,73 @@ namespace ServiceStack.Script
             return literal;
         }
 
+        public static int IndexOfQuotedString(this ReadOnlySpan<char> literal, char quoteChar, out bool hasEscapeChars)
+        {
+            int i;
+            char c;
+            i = 1;
+            hasEscapeChars = false;
+
+            while (i < literal.Length)
+            {
+                c = literal[i];
+                if (c == quoteChar)
+                {
+                    if (!literal.SafeCharEquals(i - 1, '\\') ||
+                        (literal.SafeCharEquals(i - 2, '\\') && !literal.SafeCharEquals(i - 3, '\\')))
+                        break;
+                }
+
+                i++;
+                if (!hasEscapeChars)
+                    hasEscapeChars = c == '\\';
+            }
+
+            if (i >= literal.Length || literal[i] != quoteChar)
+                return -1;
+            
+            return i;
+        }
+
+        public static ReadOnlySpan<char> ParseArgumentsList(this ReadOnlySpan<char> literal, out List<JsIdentifier> args)
+        {
+            args = new List<JsIdentifier>();
+            var c = literal[0];
+            if (c == '(')
+            {
+                literal = literal.Advance(1);
+
+                while (true)
+                {
+                    literal = literal.AdvancePastWhitespace();
+                    literal = literal.ParseIdentifier(out var arg);
+                    if (!(arg is JsIdentifier param))
+                        throw new SyntaxErrorException(
+                            $"Expected identifier but was instead '{arg.DebugToken()}', near: {literal.DebugLiteral()}");
+
+                    args.Add(param);
+
+                    literal = literal.AdvancePastWhitespace();
+
+                    if (literal.FirstCharEquals(')'))
+                    {
+                        literal = literal.Advance(1);
+                        break;
+                    }
+
+                    if (!literal.FirstCharEquals(','))
+                        throw new SyntaxErrorException(
+                            $"Expected ',' or ')' but was instead '{literal.DebugFirstChar()}', near: {literal.DebugLiteral()}");
+
+                    literal = literal.Advance(1);
+                }
+            }
+            else throw new SyntaxErrorException(
+                $"Expected '(' but was instead '{literal.DebugFirstChar()}', near: {literal.DebugLiteral()}");
+
+            return literal;
+        }
+        
         private static JsToken ParseJsTemplateLiteral(ReadOnlySpan<char> literal)
         {
             var quasis = new List<JsTemplateElement>();

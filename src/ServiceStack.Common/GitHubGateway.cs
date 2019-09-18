@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using ServiceStack.IO;
+using ServiceStack.Script;
 using ServiceStack.Text;
 
 namespace ServiceStack
@@ -23,11 +24,34 @@ namespace ServiceStack
         void WriteGistFile(string gistId, string filePath, string contents);
         void DeleteGistFiles(string gistId, params string[] filePaths);
     }
-    
-    public class GitHubGateway : IGistGateway
+
+    public interface IGitHubGateway : IGistGateway 
+    {
+        Tuple<string,string> FindRepo(string[] orgs, string name, bool useFork=false);
+        string GetSourceZipUrl(string user, string repo);
+        Task<string> GetSourceZipUrlAsync(string user, string repo);
+        Task<List<GithubRepo>> GetSourceReposAsync(string orgName);
+        Task<List<GithubRepo>> GetUserAndOrgReposAsync(string githubOrgOrUser);
+        GithubRepo GetRepo(string userOrOrg, string repo);
+        Task<GithubRepo> GetRepoAsync(string userOrOrg, string repo);
+        List<GithubRepo> GetUserRepos(string githubUser);
+        Task<List<GithubRepo>> GetUserReposAsync(string githubUser);
+        List<GithubRepo> GetOrgRepos(string githubOrg);
+        Task<List<GithubRepo>> GetOrgReposAsync(string githubOrg);
+        string GetJson(string route);
+        T GetJson<T>(string route);
+        Task<string> GetJsonAsync(string route);
+        Task<T> GetJsonAsync<T>(string route);
+        IEnumerable<T> StreamJsonCollection<T>(string route);
+        Task<List<T>> GetJsonCollectionAsync<T>(string route);
+        void DownloadFile(string downloadUrl, string fileName);
+    }
+
+    public class GitHubGateway : IGistGateway, IGitHubGateway
     {
         public string UserAgent { get; set; } = nameof(GitHubGateway);
-        public string BaseUrl { get; set; } = "https://api.github.com/";
+        public const string ApiBaseUrl = "https://api.github.com/";
+        public string BaseUrl { get; set; } = ApiBaseUrl;
 
         /// <summary>
         /// AccessTokenSecret
@@ -79,9 +103,14 @@ namespace ServiceStack
             throw new Exception($"'{name}' was not found in sources: {orgs.Join(", ")}");
         }
 
-        public virtual string GetSourceZipUrl(string user, string repo)
+        public virtual string GetSourceZipUrl(string user, string repo) => 
+            GetSourceZipUrl(user, repo, GetJson($"repos/{user}/{repo}/releases"));
+
+        public virtual async Task<string> GetSourceZipUrlAsync(string user, string repo) => 
+            GetSourceZipUrl(user, repo, await GetJsonAsync($"repos/{user}/{repo}/releases"));
+
+        private static string GetSourceZipUrl(string user, string repo, string json)
         {
-            var json = GetJson($"repos/{user}/{repo}/releases");
             var response = JSON.parse(json);
 
             if (response is List<object> releases && releases.Count > 0 &&
@@ -137,11 +166,20 @@ namespace ServiceStack
         public virtual GithubRepo GetRepo(string userOrOrg, string repo) =>
             GetJson<GithubRepo>($"/{userOrOrg}/{repo}");
 
+        public virtual Task<GithubRepo> GetRepoAsync(string userOrOrg, string repo) =>
+            GetJsonAsync<GithubRepo>($"/{userOrOrg}/{repo}");
+
         public virtual List<GithubRepo> GetUserRepos(string githubUser) =>
             StreamJsonCollection<List<GithubRepo>>($"users/{githubUser}/repos").SelectMany(x => x).ToList();
 
+        public virtual async Task<List<GithubRepo>> GetUserReposAsync(string githubUser) =>
+            (await GetJsonCollectionAsync<List<GithubRepo>>($"users/{githubUser}/repos")).SelectMany(x => x).ToList();
+
         public virtual List<GithubRepo> GetOrgRepos(string githubOrg) =>
             StreamJsonCollection<List<GithubRepo>>($"orgs/{githubOrg}/repos").SelectMany(x => x).ToList();
+        
+        public virtual async Task<List<GithubRepo>> GetOrgReposAsync(string githubOrg) =>
+            (await GetJsonCollectionAsync<List<GithubRepo>>($"orgs/{githubOrg}/repos")).SelectMany(x => x).ToList();
         
         public virtual string GetJson(string route)
         {
@@ -339,11 +377,13 @@ namespace ServiceStack
             return sanitizedPath?.Replace('/', '\\');
         }
 
+        internal static string ToBase64(ReadOnlyMemory<byte> bytes) => MemoryProvider.Instance.ToBase64(bytes);
+
         internal static string ToBase64(byte[] bytes) => Convert.ToBase64String(bytes);
         internal static string ToBase64(Stream stream)
         {
             var base64 = stream is MemoryStream ms
-                ? Convert.ToBase64String(ms.GetBuffer(), 0, (int) ms.Length)
+                ? MemoryProvider.Instance.ToBase64(ms.GetBufferAsMemory())
                 : Convert.ToBase64String(stream.ReadFully());
             return base64;
         }
@@ -364,10 +404,12 @@ namespace ServiceStack
 
                 var filePath = SanitizePath(entry.Key);
 
-                var base64 = entry.Value is string
+                var base64 = entry.Value is string || entry.Value is ReadOnlyMemory<char>
                     ? null
                     : entry.Value is byte[] bytes
                         ? ToBase64(bytes)
+                        : entry.Value is ReadOnlyMemory<byte> romBytes
+                        ? ToBase64(romBytes)
                         : entry.Value is Stream stream
                             ? ToBase64ThenDispose(stream)
                             : entry.Value is IVirtualFile file &&
@@ -381,7 +423,9 @@ namespace ServiceStack
                 var textContents = base64 ??
                    (entry.Value is string text
                        ? text
-                       : throw CreateContentNotSupportedException(entry.Value));
+                       : entry.Value is ReadOnlyMemory<char> romChar 
+                           ? romChar.ToString()
+                           : throw CreateContentNotSupportedException(entry.Value));
 
                 gistFiles[filePath] = textContents;
             }
@@ -589,4 +633,171 @@ namespace ServiceStack
     {
         public static bool IsUrl(this string gistId) => gistId.IndexOf("://", StringComparison.Ordinal) >= 0;
     }
+    
+    public class GistLink
+    {
+        public string Name { get; set; }
+        public string Url { get; set; }
+        public string User { get; set; }
+        public string To { get; set; }
+        public string Description { get; set; }
+
+        public string[] Tags { get; set; }
+
+        public string GistId { get; set; }
+
+        public string Repo { get; set; }
+        
+        public Dictionary<string,object> Modifiers { get; set; }
+
+        public string ToTagsString() => Tags == null ? "" : $"[" + string.Join(",", Tags) + "]";
+
+        public string ToListItem()
+        {
+            var sb = new StringBuilder(" - [")
+                .Append(Name)
+                .Append("](")
+                .Append(Url)
+                .Append(") {")
+                .Append(!string.IsNullOrEmpty(To) ? "to:" + To.ToJson() : "")
+                .Append("} `")
+                .Append(Tags != null ? string.Join(",", Tags) : "")
+                .Append("` ")
+                .Append(Description);
+
+            return sb.ToString();
+        }
+
+        public static string RenderLinks(List<GistLink> links)
+        {
+            var sb = new StringBuilder();
+            foreach (var link in links)
+            {
+                sb.AppendLine(link.ToListItem());
+            }
+            return sb.ToString();
+        }
+
+        public static List<GistLink> Parse(string md)
+        {
+            var to = new List<GistLink>();
+
+            if (!string.IsNullOrEmpty(md))
+            {
+                foreach (var strLine in md.ReadLines())
+                {
+                    var line = strLine.AsSpan();
+                    if (!line.TrimStart().StartsWith("- ["))
+                        continue;
+
+                    line.SplitOnFirst('[', out _, out var startName);
+                    startName.SplitOnFirst(']', out var name, out var endName);
+                    endName.SplitOnFirst('(', out _, out var startUrl);
+                    startUrl.SplitOnFirst(')', out var url, out var endUrl);
+
+                    var afterModifiers = endUrl.ParseJsToken(out var token);
+                    
+                    var modifiers = new Dictionary<string, object>();
+                    if (token is JsObjectExpression obj)
+                    {
+                        foreach (var jsProperty in obj.Properties)
+                        {
+                            if (jsProperty.Key is JsIdentifier id)
+                            {
+                                modifiers[id.Name] = (jsProperty.Value as JsLiteral)?.Value;
+                            }
+                        }
+                    }
+
+                    var toPath = modifiers.TryGetValue("to", out var oValue)
+                        ? oValue.ToString()
+                        : null;
+
+                    string tags = null;
+                    afterModifiers = afterModifiers.TrimStart();
+                    if (afterModifiers.StartsWith("`"))
+                    {
+                        afterModifiers = afterModifiers.Advance(1);
+                        var pos = afterModifiers.IndexOf('`');
+                        if (pos >= 0)
+                        {
+                            tags = afterModifiers.Substring(0, pos);
+                            afterModifiers = afterModifiers.Advance(pos + 1);
+                        }
+                    }
+
+                    if (name == null || url == null)
+                        continue;
+
+                    var link = new GistLink
+                    {
+                        Name = name.ToString(),
+                        Url = url.ToString(),
+                        Modifiers = modifiers,
+                        To = toPath,
+                        Description = afterModifiers.Trim().ToString(),
+                        User = url.Substring("https://".Length).RightPart('/').LeftPart('/'),
+                        Tags = tags?.Split(',').Map(x => x.Trim()).ToArray(),
+                    };
+
+                    if (TryParseGitHubUrl(link.Url, out var gistId, out var user, out var repo))
+                    {
+                        link.GistId = gistId;
+                        if (user != null)
+                        {
+                            link.User = user;
+                            link.Repo = repo;
+                        }
+                    }
+
+                    if (link.User == "gistlyn" || link.User == "mythz")
+                        link.User = "ServiceStack";
+
+                    to.Add(link);
+                }
+            }
+
+            return to;
+        }
+
+        public static bool TryParseGitHubUrl(string url, out string gistId, out string user, out string repo)
+        {
+            gistId = user = repo = null;
+
+            if (url.StartsWith("https://gist.github.com"))
+            {
+                gistId = url.LastRightPart('/');
+                return true;
+            }
+
+            if (url.StartsWith("https://github.com/"))
+            {
+                var pathInfo = url.Substring("https://github.com/".Length);
+                user = pathInfo.LeftPart('/');
+                repo = pathInfo.RightPart('/').LeftPart('/');
+                return true;
+            }
+
+            return false;
+        }
+
+        public static GistLink Get(List<GistLink> links, string gistAlias)
+        {
+            var sanitizedAlias = gistAlias.Replace("-", "");
+            var gistLink = links.FirstOrDefault(x => x.Name.Replace("-", "").EqualsIgnoreCase(sanitizedAlias));
+            return gistLink;
+        }
+
+        public bool MatchesTag(string tagName)
+        {
+            if (Tags == null)
+                return false;
+
+            var searchTags = tagName.Split(',').Map(x => x.Trim());
+            return searchTags.Count == 1
+                ? Tags.Any(x => x.EqualsIgnoreCase(tagName))
+                : Tags.Any(x => searchTags.Any(x.EqualsIgnoreCase));
+        }
+    }
+    
 }

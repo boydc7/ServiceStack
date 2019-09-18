@@ -144,6 +144,7 @@ namespace ServiceStack
             {
                 var defaultContentType = request.ResponseContentType;
                 var disposableResult = result as IDisposable; 
+                bool flushAsync = false;
 
                 try
                 {
@@ -265,8 +266,9 @@ namespace ServiceStack
                         }
                     }
 
+                    var jsconfig = config.AllowJsConfig ? request.QueryString[Keywords.JsConfig] : null;
                     using (resultScope)
-                    using (config.AllowJsConfig ? JsConfig.CreateScope(request.QueryString[Keywords.JsConfig]) : null)
+                    using (jsconfig != null ? JsConfig.CreateScope(jsconfig) : null)
                     {
                         if (WriteToOutputStream(response, result, bodyPrefix, bodySuffix))
                         {
@@ -274,9 +276,15 @@ namespace ServiceStack
                             return true;
                         }
 
+#if NET45
+                        //JsConfigScope uses ThreadStatic in .NET v4.5 so avoid async thread hops by writing sync to MemoryStream
+                        if (resultScope != null || jsconfig != null)
+                            response.UseBufferedStream = true;
+#endif
+
                         if (await WriteToOutputStreamAsync(response, result, bodyPrefix, bodySuffix, token))
                         {
-                            await response.FlushAsync(token);
+                            flushAsync = true;
                             return true;
                         }
 
@@ -342,6 +350,14 @@ namespace ServiceStack
                 }
                 finally
                 {
+                    if (flushAsync) // move async Thread Hop to outside JsConfigScope so .NET v4.5 disposes same scope
+                    {
+                        try
+                        {
+                            await response.FlushAsync(token);
+                        }
+                        catch(Exception flushEx) { Log.Error("response.FlushAsync()", flushEx); }
+                    }
                     disposableResult?.Dispose();
                     await response.EndRequestAsync(skipHeaders: true);
                 }
@@ -451,21 +467,21 @@ namespace ServiceStack
             if (await HandleCustomErrorHandler(httpRes, httpReq, contentType, statusCode, errorDto, ex))
                 return;
 
-            if ((httpRes.ContentType == null || httpRes.ContentType == MimeTypes.Html) 
-                && contentType != null && contentType != httpRes.ContentType)
-            {
-                httpRes.ContentType = contentType;
-            }
-            if (HostContext.Config.AppendUtf8CharsetOnContentTypes.Contains(contentType))
-            {
-                httpRes.ContentType += ContentFormat.Utf8Suffix;
-            }
-
-            var hold = httpRes.StatusDescription;
-            var hasDefaultStatusDescription = hold == null || hold == "OK";
-
             if (!httpRes.HasStarted)
             {
+                if ((httpRes.ContentType == null || httpRes.ContentType == MimeTypes.Html) 
+                    && contentType != null && contentType != httpRes.ContentType)
+                {
+                    httpRes.ContentType = contentType;
+                }
+                if (HostContext.Config.AppendUtf8CharsetOnContentTypes.Contains(contentType))
+                {
+                    httpRes.ContentType += ContentFormat.Utf8Suffix;
+                }
+
+                var hold = httpRes.StatusDescription;
+                var hasDefaultStatusDescription = hold == null || hold == "OK";
+
                 httpRes.StatusCode = statusCode;
 
                 httpRes.StatusDescription = hasDefaultStatusDescription

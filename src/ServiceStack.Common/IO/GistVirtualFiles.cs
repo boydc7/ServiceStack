@@ -52,9 +52,39 @@ namespace ServiceStack.IO
 
         public static bool IsDirSep(char c) => c == '\\' || c == '/';
 
+        public const string Base64Modifier = "|base64";
+
+        private static byte[] FromBase64String(string path, string base64String)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(base64String))
+                    return TypeConstants.EmptyByteArray;
+                
+                return Convert.FromBase64String(base64String);
+            }
+            catch (Exception ex)
+            {
+                throw new Exception(
+                    $"Could not convert Base 64 contents of '{path}', length: {base64String.Length}, starting with: {base64String.SafeSubstring(50)}",
+                    ex);
+            }
+        }
+
+        public static bool GetGistTextContents(string filePath, Gist gist, out string text)
+        {
+            if (GetGistContents(filePath, gist, out text, out var bytesContent))
+            {
+                if (text == null)
+                    text = MemoryProvider.Instance.FromUtf8(bytesContent.GetBufferAsMemory().Span).ToString();
+                return true;
+            }
+            return false;
+        }
+        
         public static bool GetGistContents(string filePath, Gist gist, out string text, out MemoryStream stream)
         {
-            var base64FilePath = filePath + "|base64";
+            var base64FilePath = filePath + Base64Modifier;
             foreach (var entry in gist.Files)
             {
                 var file = entry.Value;
@@ -62,7 +92,8 @@ namespace ServiceStack.IO
                 if (!isMatch)
                     continue;
 
-                if (string.IsNullOrEmpty(file.Content) && file.Truncated)
+                // GitHub can truncate Gist and return partial content
+                if ((string.IsNullOrEmpty(file.Content) || file.Content.Length < file.Size) && file.Truncated)
                 {
                     file.Content = file.Raw_Url.GetStringFromUrl(
                         requestFilter: req => req.UserAgent = nameof(GitHubGateway));
@@ -71,15 +102,22 @@ namespace ServiceStack.IO
                 text = file.Content;
                 if (entry.Key == filePath)
                 {
-                    var bytesMemory = MemoryProvider.Instance.ToUtf8(text.AsSpan());
-                    //TODO: replace with MemoryProvider.Instance.ToMemoryStream()
-                    stream = MemoryStreamFactory.GetStream(bytesMemory.ToArray());
+                    if (filePath.EndsWith(Base64Modifier))
+                    {
+                        stream = MemoryStreamFactory.GetStream(FromBase64String(entry.Key, text));
+                        text = null;
+                    }
+                    else
+                    {
+                        var bytesMemory = MemoryProvider.Instance.ToUtf8(text.AsSpan());
+                        stream = MemoryProvider.Instance.ToMemoryStream(bytesMemory.Span); 
+                    }
                     return true;
                 }
 
                 if (entry.Key == base64FilePath)
                 {
-                    stream = MemoryStreamFactory.GetStream(Convert.FromBase64String(text));
+                    stream = MemoryStreamFactory.GetStream(FromBase64String(entry.Key, text));
                     text = null;
                     return true;
                 }
@@ -115,7 +153,7 @@ namespace ServiceStack.IO
             var gist = await GetGistAsync();
 
             var files = gist.Files.Where(x => 
-                string.IsNullOrEmpty(x.Value.Content) && x.Value.Truncated);
+                (string.IsNullOrEmpty(x.Value.Content) || x.Value.Content.Length < x.Value.Size) && x.Value.Truncated);
 
             var tasks = files.Select(async x => {
                 x.Value.Content = await x.Value.Raw_Url.GetStringFromUrlAsync();
@@ -215,7 +253,7 @@ namespace ServiceStack.IO
         public void WriteFile(string virtualPath, Stream stream)
         {
             var base64 = ToBase64(stream);
-            var filePath = SanitizePath(virtualPath) + "|base64";
+            var filePath = SanitizePath(virtualPath) + Base64Modifier;
             Gateway.WriteGistFile(GistId, filePath, base64);
             ClearGist();
         }
@@ -249,7 +287,7 @@ namespace ServiceStack.IO
         public string ResolveGistFileName(string filePath)
         {
             var gist = GetGist();
-            var baseFilePath = filePath + "|base64";
+            var baseFilePath = filePath + Base64Modifier;
             foreach (var entry in gist.Files)
             {
                 if (entry.Key == filePath || entry.Key == baseFilePath)
@@ -380,6 +418,8 @@ namespace ServiceStack.IO
 
         public string GistId => PathProvider.GistId;
 
+        public override string Extension => Name.LastRightPart('.').LeftPart('|');
+
         public GistVirtualFile(GistVirtualFiles pathProvider, IVirtualDirectory directory)
             : base(pathProvider, directory)
         {
@@ -422,6 +462,15 @@ namespace ServiceStack.IO
         {
             Stream.Position = 0;
             return Stream.CopyToNewMemoryStream();
+        }
+
+        public override object GetContents()
+        {
+            return Text != null 
+                ? (object) Text.AsMemory() 
+                : (Stream is MemoryStream ms
+                    ? ms.GetBufferAsMemory()
+                    : Stream?.CopyToNewMemoryStream().GetBufferAsMemory());
         }
 
         public override void Refresh()

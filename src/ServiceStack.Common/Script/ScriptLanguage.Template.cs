@@ -6,32 +6,194 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.Text;
 
-namespace ServiceStack.Script
+namespace ServiceStack.Script 
 {
-    public class RawString : IRawString
+    /// <summary>
+    /// #Script Language which processes ```lang ... ``` blocks
+    /// </summary>
+    public class SharpScript : ScriptLanguage
     {
-        public static RawString Empty = new RawString("");
+        public static readonly ScriptLanguage Language = new SharpScript();
+
+        public override string Name => "script";
         
-        private readonly string value;
-        public RawString(string value) => this.value = value;
-        public string ToRawString() => value;
+        public override List<PageFragment> Parse(ScriptContext context, ReadOnlyMemory<char> body, ReadOnlyMemory<char> modifiers)
+        {
+            return context.ParseScript(body);
+        }
+    }
+    
+    /// <summary>
+    /// The #Script Default Template Language (does not process ```lang ... ``` blocks)
+    /// </summary>
+    public class ScriptTemplate : ScriptLanguage
+    {
+        public static readonly ScriptLanguage Language = new ScriptTemplate();
+        
+        public override string Name => "template";
+        
+        public override List<PageFragment> Parse(ScriptContext context, ReadOnlyMemory<char> body, ReadOnlyMemory<char> modifiers)
+        {
+            var pageFragments = context.ParseTemplate(body);
+            return pageFragments;
+        }
+        
+        public override async Task<bool> WritePageFragmentAsync(ScriptScopeContext scope, PageFragment fragment, CancellationToken token)
+        {
+            if (fragment is PageStringFragment str)
+            {
+                await scope.OutputStream.WriteAsync(str.ValueUtf8, token);
+            }
+            else if (fragment is PageVariableFragment var)
+            {
+                if (var.Binding?.Equals(ScriptConstants.Page) == true)
+                {
+                    await scope.PageResult.WritePageAsync(scope.PageResult.Page, scope.PageResult.CodePage, scope, token);
+
+                    if (scope.PageResult.HaltExecution)
+                        scope.PageResult.HaltExecution = false; //break out of page but continue evaluating layout
+                }
+                else
+                {
+                    await scope.PageResult.WriteVarAsync(scope, var, token);
+                }
+            }
+            else if (fragment is PageBlockFragment blockFragment)
+            {
+                var block = scope.PageResult.GetBlock(blockFragment.Name);
+                await block.WriteAsync(scope, blockFragment, token);
+            }
+            else return false;
+
+            return true; 
+        }
     }
 
-    public static class SharpPageUtils
+    public static class ScriptTemplateUtils
     {
-        public static List<PageFragment> ParseTemplatePage(string text)
+        /// <summary>
+        /// Render #Script output to string
+        /// </summary>
+        public static string RenderScript(this ScriptContext context, string script, out ScriptException error) => 
+            context.RenderScript(script, null, out error);
+        /// <summary>
+        /// Alias for EvaluateScript 
+        /// </summary>
+        public static string EvaluateScript(this ScriptContext context, string script, out ScriptException error) => 
+            context.EvaluateScript(script, null, out error);
+
+        /// <summary>
+        /// Render #Script output to string
+        /// </summary>
+        public static string RenderScript(this ScriptContext context, string script, Dictionary<string, object> args, out ScriptException error) =>
+            context.EvaluateScript(script, args, out error);
+        /// <summary>
+        /// Alias for RenderScript 
+        /// </summary>
+        public static string EvaluateScript(this ScriptContext context, string script, Dictionary<string, object> args, out ScriptException error)
         {
-            return ParseTemplatePage(text.AsMemory());
+            var pageResult = new PageResult(context.OneTimePage(script));
+            args.Each((x,y) => pageResult.Args[x] = y);
+            try { 
+                var output = pageResult.Result;
+                error = pageResult.LastFilterError != null ? new ScriptException(pageResult) : null;
+                return output;
+            }
+            catch (Exception e)
+            {
+                pageResult.LastFilterError = e;
+                error = new ScriptException(pageResult);
+                return null;
+            }
         }
 
-        private const char FilterSep = '|';
+        /// <summary>
+        /// Render #Script output to string
+        /// </summary>
+        public static string RenderScript(this ScriptContext context, string script, Dictionary<string, object> args = null) =>
+            context.EvaluateScript(script, args);
+        /// <summary>
+        /// Alias for RenderScript 
+        /// </summary>
+        public static string EvaluateScript(this ScriptContext context, string script, Dictionary<string, object> args=null)
+        {
+            var pageResult = new PageResult(context.OneTimePage(script));
+            args.Each((x,y) => pageResult.Args[x] = y);
+            return pageResult.EvaluateScript();
+        }
+
+        /// <summary>
+        /// Render #Script output to string asynchronously
+        /// </summary>
+        public static Task<string> RenderScriptAsync(this ScriptContext context, string script, Dictionary<string, object> args = null) =>
+            context.EvaluateScriptAsync(script, args);
+        /// <summary>
+        /// Alias for RenderScriptAsync 
+        /// </summary>
+        public static async Task<string> EvaluateScriptAsync(this ScriptContext context, string script, Dictionary<string, object> args=null)
+        {
+            var pageResult = new PageResult(context.OneTimePage(script));
+            args.Each((x,y) => pageResult.Args[x] = y);
+            return await pageResult.EvaluateScriptAsync();
+        }
+        
+        /// <summary>
+        /// Evaluate #Script and convert returned value to T 
+        /// </summary>
+        public static T Evaluate<T>(this ScriptContext context, string script, Dictionary<string, object> args = null) =>
+            context.Evaluate(script, args).ConvertTo<T>();
+        
+        /// <summary>
+        /// Evaluate #Script and return value 
+        /// </summary>
+        public static object Evaluate(this ScriptContext context, string script, Dictionary<string, object> args=null)
+        {
+            var pageResult = new PageResult(context.OneTimePage(script));
+            args.Each((x,y) => pageResult.Args[x] = y);
+
+            if (!pageResult.EvaluateResult(out var returnValue))
+                throw new NotSupportedException(ScriptContextUtils.ErrorNoReturn);
+            
+            return ScriptLanguage.UnwrapValue(returnValue);
+        }
+
+        /// <summary>
+        /// Evaluate #Script and convert returned value to T asynchronously
+        /// </summary>
+        public static async Task<T> EvaluateAsync<T>(this ScriptContext context, string script, Dictionary<string, object> args = null) =>
+            (await context.EvaluateAsync(script, args)).ConvertTo<T>();
+        
+        /// <summary>
+        /// Evaluate #Script and convert returned value to T asynchronously
+        /// </summary>
+        public static async Task<object> EvaluateAsync(this ScriptContext context, string script, Dictionary<string, object> args=null)
+        {
+            var pageResult = new PageResult(context.OneTimePage(script));
+            args.Each((x,y) => pageResult.Args[x] = y);
+
+            var ret = await pageResult.EvaluateResultAsync();
+            if (!ret.Item1)
+                throw new NotSupportedException(ScriptContextUtils.ErrorNoReturn);
+            
+            return ScriptLanguage.UnwrapValue(ret.Item2);
+        }
+        
+        
+        public static List<PageFragment> ParseTemplate(string text)
+        {
+            return new ScriptContext().Init().ParseTemplate(text.AsMemory());
+        }
+
+        internal const char FilterSep = '|';
 
         // {{#name}}  {{else if a=b}}  {{else}}  {{/name}}
         //          ^
         // returns    ^                         ^
-        static ReadOnlyMemory<char> ParseStatementBody(this ReadOnlyMemory<char> literal, ReadOnlyMemory<char> blockName, out List<PageFragment> body)
+        public static ReadOnlyMemory<char> ParseTemplateBody(this ReadOnlyMemory<char> literal, ReadOnlyMemory<char> blockName, out ReadOnlyMemory<char> body)
         {
             var inStatements = 0;
             var pos = 0;
@@ -58,7 +220,7 @@ namespace ServiceStack.Script
                         literal.Slice(pos + 2 + 1).ParseVarName(out var name);
                         if (name.EqualsOrdinal(blockName))
                         {
-                            body = ParseTemplatePage(literal.Slice(0, pos).TrimFirstNewLine());
+                            body = literal.Slice(0, pos).TrimFirstNewLine();
                             return literal.Slice(pos);
                         }
                     }
@@ -69,7 +231,7 @@ namespace ServiceStack.Script
                 {
                     if (inStatements == 0)
                     {
-                        body = ParseTemplatePage(literal.Slice(0, pos).TrimFirstNewLine());
+                        body = literal.Slice(0, pos).TrimFirstNewLine();
                         return literal.Slice(pos);
                     }
                 }
@@ -81,13 +243,14 @@ namespace ServiceStack.Script
         //   {{else if a=b}}  {{else}}  {{/name}}
         //  ^
         // returns           ^         ^
-        static ReadOnlyMemory<char> ParseElseStatement(this ReadOnlyMemory<char> literal, string blockName, out PageElseBlock statement)
+        public static ReadOnlyMemory<char> ParseTemplateElseBlock(this ReadOnlyMemory<char> literal, string blockName, 
+            out ReadOnlyMemory<char> elseArgument, out ReadOnlyMemory<char> elseBody)
         {
             var inStatements = 0;
             var pos = 0;
-            statement = null;
             var statementPos = -1;
-            var elseExpr = default(ReadOnlyMemory<char>);
+            elseBody = default;
+            elseArgument = default;
             
             while (true)
             {
@@ -108,8 +271,7 @@ namespace ServiceStack.Script
                         literal.Slice(pos + 2 + 1).ParseVarName(out var name);
                         if (name.EqualsOrdinal(blockName))
                         {
-                            var body = ParseTemplatePage(literal.Slice(statementPos, pos - statementPos).TrimFirstNewLine());
-                            statement = new PageElseBlock(elseExpr, body);
+                            elseBody = literal.Slice(statementPos, pos - statementPos).TrimFirstNewLine();
                             return literal.Slice(pos);
                         }
                     }
@@ -122,9 +284,7 @@ namespace ServiceStack.Script
                     {
                         if (statementPos >= 0)
                         {
-                            var bodyText = literal.Slice(statementPos, pos - statementPos).TrimFirstNewLine();
-                            var body = ParseTemplatePage(bodyText);
-                            statement = new PageElseBlock(elseExpr, body);
+                            elseBody = literal.Slice(statementPos, pos - statementPos).TrimFirstNewLine();
                             return literal.Slice(pos);
                         }
                         
@@ -134,7 +294,7 @@ namespace ServiceStack.Script
 
                         var exprStartPos = pos + 2 + 4; //= {{else...
 
-                        elseExpr = literal.Slice(exprStartPos, endExprPos - exprStartPos).Trim();
+                        elseArgument = literal.Slice(exprStartPos, endExprPos - exprStartPos).Trim();
                         statementPos = endExprPos + 2;
                     }
                 }
@@ -142,8 +302,71 @@ namespace ServiceStack.Script
                 pos += 2;
             }
         }
+        
+        public static List<PageFragment> ParseScript(this ScriptContext context, ReadOnlyMemory<char> text)
+        {
+            var to = new List<PageFragment>();
+            ScriptLanguage scriptLanguage = null;
+            ReadOnlyMemory<char> modifiers = default;
+            ReadOnlyMemory<char> prevBlock = default;
+            int startBlockPos = -1;
+            var cursorPos = 0;
+            var lastBlockPos = 0;
+            
+            const int delim = 3; // '```'.length
 
-        public static List<PageFragment> ParseTemplatePage(ReadOnlyMemory<char> text)
+            while (text.TryReadLine(out var line, ref cursorPos))
+            {
+                var lineLength = line.Length;
+                line = line.AdvancePastWhitespace();
+
+                if (line.StartsWith("```"))
+                {
+                    if (startBlockPos >= 0 && line.Slice(delim).AdvancePastWhitespace().IsEmpty) //is end block
+                    {
+                        var templateFragments = ScriptTemplate.Language.Parse(context, prevBlock);
+                        to.AddRange(templateFragments);
+
+                        var blockBody = text.ToLineStart(cursorPos, lineLength, startBlockPos);
+                        var blockFragments = scriptLanguage.Parse(context, blockBody, modifiers);
+                        to.AddRange(blockFragments);
+
+                        prevBlock = default;
+                        startBlockPos = -1;
+                        scriptLanguage = null;
+                        modifiers = null;
+                        lastBlockPos = cursorPos;
+                        continue;
+                    }
+
+                    if (line.SafeGetChar(delim + 1).IsValidVarNameChar())
+                    {
+                        line = line.Slice(delim).ParseVarName(out var blockNameSpan);
+
+                        var blockName = blockNameSpan.ToString();
+                        scriptLanguage = context.GetScriptLanguage(blockName);
+                        if (scriptLanguage == null)
+                            continue;
+
+                        modifiers = line.AdvancePastChar('|');
+                        var delimLen = text.Span.SafeCharEquals(cursorPos - 2, '\r') ? 2 : 1;
+                        prevBlock = text.Slice(lastBlockPos, cursorPos - lastBlockPos - lineLength - delimLen);
+                        startBlockPos = cursorPos;
+                    }
+                }
+            }
+
+            var remainingBlock = text.Slice(lastBlockPos);
+            if (!remainingBlock.IsEmpty)
+            {
+                var templateFragments = ScriptTemplate.Language.Parse(context, remainingBlock);
+                to.AddRange(templateFragments);
+            }
+            
+            return to;
+        }
+
+        public static List<PageFragment> ParseTemplate(this ScriptContext context, ReadOnlyMemory<char> text)
         {
             var to = new List<PageFragment>();
 
@@ -152,13 +375,56 @@ namespace ServiceStack.Script
             
             int pos;
             var lastPos = 0;
-            while ((pos = text.IndexOf("{{", lastPos)) != -1)
+
+            int nextPos()
+            {
+                var c1 = text.IndexOf("{{", lastPos);
+                var c2 = text.IndexOf("{|", lastPos);
+
+                if (c2 == -1)
+                    return c1;
+                
+                return c1 == -1 ? c2 : c1 < c2 ? c1 : c2;
+            }
+            
+            while ((pos = nextPos()) != -1)
             {
                 var block = text.Slice(lastPos, pos - lastPos);
                 if (!block.IsNullOrEmpty())
                     to.Add(new PageStringFragment(block));
                 
                 var varStartPos = pos + 2;
+                
+                if (varStartPos >= text.Span.Length)
+                    throw new SyntaxErrorException($"Unterminated '{{{{' expression, near '{text.Slice(lastPos).DebugLiteral()}'");
+
+                if (text.Span.SafeCharEquals(varStartPos - 1, '|')) // lang expression syntax {|lang ... |} https://flow.org/en/docs/types/objects/#toc-exact-object-types
+                {
+                    var literal = text.Slice(varStartPos);
+                    literal = literal.ParseVarName(out var langSpan);
+                    
+                    var lang = context.GetScriptLanguage(langSpan.ToString());
+                    if (lang != null)
+                    {
+                        var endPos = literal.IndexOf("|}");
+                        if (endPos == -1)
+                            throw new SyntaxErrorException($"Unterminated '|}}' expression, near '{text.Slice(varStartPos).DebugLiteral()}'");
+
+                        var exprStr = literal.Slice(0, endPos);
+                        var langExprFragment = lang.Parse(context, exprStr);
+                        to.AddRange(langExprFragment);
+                    }
+                    else
+                    {
+                        var nextLastPos = text.IndexOf("|}", varStartPos) + 2;
+                        block = text.Slice(pos, nextLastPos - pos);
+                        if (!block.IsNullOrEmpty())
+                            to.Add(new PageStringFragment(block));
+                    }
+
+                    lastPos = text.IndexOf("|}", varStartPos) + 2;
+                    continue;
+                }
 
                 var firstChar = text.Span[varStartPos];
                 if (firstChar == '*') //comment
@@ -170,57 +436,14 @@ namespace ServiceStack.Script
                 else if (firstChar == '#') //block statement
                 {
                     var literal = text.Slice(varStartPos + 1);
-                    literal = literal.ParseVarName(out var blockNameSpan);
 
-                    var blockName = blockNameSpan.ToString();
-                    var endExprPos = literal.IndexOf("}}");
-                    if (endExprPos == -1)
-                        throw new SyntaxErrorException($"Unterminated '{blockName}' block expression, near '{literal.DebugLiteral()}'" );
+                    literal = literal.ParseTemplateScriptBlock(context, out var blockFragment);
 
-                    var blockExpr = literal.Slice(0, endExprPos).Trim();
-                    literal = literal.Advance(endExprPos + 2);
-
-                    if (!ScriptConfig.DontEvaluateBlocksNamed.Contains(blockName))
-                    {
-                        literal = literal.ParseStatementBody(blockNameSpan, out var body);
-                        var elseStatements = new List<PageElseBlock>();
-
-                        while (literal.StartsWith("{{else"))
-                        {
-                            literal = literal.ParseElseStatement(blockName, out var elseStatement);
-                            elseStatements.Add(elseStatement);
-                        }
-
-                        literal = literal.Advance(2 + 1 + blockName.Length + 2);
+                    var length = text.Length - pos - literal.Length;
+                    blockFragment.OriginalText = text.Slice(pos, length);
+                    lastPos = pos + length;
                     
-                        //remove new line after partial block end tag
-                        literal = literal.TrimFirstNewLine();
-
-                        var length = text.Length - pos - literal.Length;
-                        var originalText = text.Slice(pos, length);
-                        lastPos = pos + length;
-                    
-                        var statement = new PageBlockFragment(originalText, blockName, blockExpr, body, elseStatements);
-                        to.Add(statement);
-                    }
-                    else
-                    {
-                        var endBlock = "{{/" + blockName + "}}";
-                        var endBlockPos = literal.IndexOf(endBlock);
-                        if (endBlockPos == -1)
-                            throw new SyntaxErrorException($"Unterminated end block '{endBlock}'");
-
-                        var endBlockBody = literal.Slice(0, endBlockPos);
-                        literal = literal.Advance(endBlockPos + endBlock.Length).TrimFirstNewLine();
-                        var body = new List<PageFragment>{ new PageStringFragment(endBlockBody) };
-                        
-                        var length = text.Length - pos - literal.Length;
-                        var originalText = text.Slice(pos, length);
-                        lastPos = pos + length;
-                    
-                        var statement = new PageBlockFragment(originalText, blockName, blockExpr, body);
-                        to.Add(statement);
-                    }
+                    to.Add(blockFragment);
                 }
                 else
                 {
@@ -289,7 +512,7 @@ namespace ServiceStack.Script
                         var lastExpr = varFragment.FilterExpressions?.LastOrDefault();
                         var filterName = lastExpr?.Name ??
                                          varFragment?.InitialExpression?.Name ?? varFragment.Binding;
-                        if (filterName != null && ScriptConfig.RemoveNewLineAfterFiltersNamed.Contains(filterName))
+                        if (filterName != null && context.RemoveNewLineAfterFiltersNamed.Contains(filterName))
                         {
                             lastPos += newLineLen;
                         }
@@ -304,6 +527,61 @@ namespace ServiceStack.Script
             }
 
             return to;
+        }
+
+        // {{#if ...}}
+        //    ^
+        public static ReadOnlyMemory<char> ParseTemplateScriptBlock(this ReadOnlyMemory<char> literal, ScriptContext context, out PageBlockFragment blockFragment)
+        {
+            literal = literal.ParseVarName(out var blockNameSpan);
+
+            PageBlockFragment statement;
+            var blockName = blockNameSpan.ToString();
+            var endBlock = "{{/" + blockName + "}}";
+            var endExprPos = literal.IndexOf("}}");
+            if (endExprPos == -1)
+                throw new SyntaxErrorException($"Unterminated '{blockName}' block expression, near '{literal.DebugLiteral()}'" );
+
+            var argument = literal.Slice(0, endExprPos).Trim();
+            literal = literal.Advance(endExprPos + 2);
+
+            var language = context.ParseAsLanguage.TryGetValue(blockName, out var lang)
+                ? lang
+                : ScriptTemplate.Language;
+            
+            if (language.Name == ScriptVerbatim.Language.Name)
+            {
+                var endBlockPos = literal.IndexOf(endBlock);
+                if (endBlockPos == -1)
+                    throw new SyntaxErrorException($"Unterminated end block '{endBlock}'");
+
+                var body = literal.Slice(0, endBlockPos);
+                literal = literal.Advance(endBlockPos + endBlock.Length).TrimFirstNewLine();
+
+                blockFragment = language.ParseVerbatimBlock(blockName, argument, body);
+                return literal;
+            }
+
+            literal = literal.ParseTemplateBody(blockNameSpan, out var bodyText);
+            var bodyFragments = language.Parse(context, bodyText);
+                
+            var elseBlocks = new List<PageElseBlock>();
+            while (literal.StartsWith("{{else"))
+            {
+                literal = literal.ParseTemplateElseBlock(blockName, out var elseArgument,  out var elseBody);
+
+                var elseBlock = new PageElseBlock(elseArgument, language.Parse(context, elseBody));
+                elseBlocks.Add(elseBlock);
+            }
+
+            literal = literal.Advance(2 + 1 + blockName.Length + 2);
+
+            //remove new line after partial block end tag
+            literal = literal.TrimFirstNewLine();
+
+            blockFragment = new PageBlockFragment(blockName, argument, bodyFragments, elseBlocks);
+
+            return literal;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -373,7 +651,7 @@ namespace ServiceStack.Script
 
                         var valueExpr = value == null
                             ? (Expression) Expression.Call(
-                                typeof(SharpPageUtils).GetStaticMethod(nameof(EvaluateBinding)),
+                                typeof(ScriptTemplateUtils).GetStaticMethod(nameof(EvaluateBinding)),
                                 scope,
                                 Expression.Constant(token))
                             : Expression.Constant(value);
@@ -386,7 +664,7 @@ namespace ServiceStack.Script
                         {
                             if (token != null)
                             {
-                                var evalAsInt = typeof(SharpPageUtils).GetStaticMethod(nameof(EvaluateBindingAs))
+                                var evalAsInt = typeof(ScriptTemplateUtils).GetStaticMethod(nameof(EvaluateBindingAs))
                                     .MakeGenericMethod(typeof(int));
                                 body = Expression.ArrayIndex(body,
                                     Expression.Call(evalAsInt, scope, Expression.Constant(token)));
@@ -406,7 +684,7 @@ namespace ServiceStack.Script
                                 var indexType = pi.GetGetMethod()?.GetParameters().FirstOrDefault()?.ParameterType;
                                 if (indexType != typeof(object))
                                 {
-                                    var evalAsInt = typeof(SharpPageUtils).GetStaticMethod(nameof(EvaluateBindingAs))
+                                    var evalAsInt = typeof(ScriptTemplateUtils).GetStaticMethod(nameof(EvaluateBindingAs))
                                         .MakeGenericMethod(indexType);
                                     valueExpr = Expression.Call(evalAsInt, scope, Expression.Constant(token));
                                 }
@@ -510,12 +788,12 @@ namespace ServiceStack.Script
         private static Expression CreateStringIndexExpression(Expression body, JsToken binding, ParameterExpression scope,
             Expression valueExpr, ref Type currType)
         {
-            body = Expression.Call(body, typeof(string).GetMethod("ToCharArray", Type.EmptyTypes));
+            body = Expression.Call(body, typeof(string).GetMethod(nameof(string.ToCharArray), Type.EmptyTypes));
             currType = typeof(char[]);
 
             if (binding != null)
             {
-                var evalAsInt = typeof(SharpPageUtils).GetStaticMethod(nameof(EvaluateBindingAs))
+                var evalAsInt = typeof(ScriptTemplateUtils).GetStaticMethod(nameof(EvaluateBindingAs))
                     .MakeGenericMethod(typeof(int));
                 body = Expression.ArrayIndex(body, Expression.Call(evalAsInt, scope, Expression.Constant(binding)));
             }
@@ -550,6 +828,6 @@ namespace ServiceStack.Script
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsWhiteSpace(this char c) =>
-            c == ' ' || (c >= '\x0009' && c <= '\x000d') || c == '\x00a0' || c == '\x0085';
+            c == ' ' || (c >= '\x0009' && c <= '\x000d') || c == '\x00a0' || c == '\x0085';        
     }
 }

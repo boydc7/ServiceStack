@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Net;
-using Funq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -17,6 +17,7 @@ using ServiceStack.Mvc;
 using ServiceStack.NativeTypes.TypeScript;
 using ServiceStack.Text;
 using ServiceStack.Validation;
+using Container = Funq.Container;
 
 namespace CheckWebCore
 {
@@ -45,7 +46,10 @@ namespace CheckWebCore
 
     public class Startup : ModularStartup
     {
-        public Startup(IConfiguration configuration) : base(configuration){}
+        public Startup(IConfiguration configuration) : base(configuration)
+        {
+//            IgnoreTypes.Add(typeof(MyStartup));
+        }
 
         // This method gets called by the runtime. Use this method to add services to the container.
         // For more information on how to configure your application, visit https://go.microsoft.com/fwlink/?LinkID=398940
@@ -99,13 +103,18 @@ namespace CheckWebCore
         {
             services.AddSingleton<ICacheClient>(new MemoryCacheClient());
         }
-
+        
         // http://localhost:5000/auth/credentials?username=testman@test.com&&password=!Abc1234
         // Configure your AppHost with the necessary configuration and dependencies your App needs
         public override void Configure(Container container)
         {
             // enable server-side rendering, see: https://sharpscript.net
             Plugins.Add(new SharpPagesFeature()); 
+            
+            Plugins.Add(new LispReplTcpServer {
+//                RequireAuthSecret = true,
+                AllowScriptingOfAllTypes = true,
+            });
 
             if (Config.DebugMode)
             {
@@ -118,8 +127,9 @@ namespace CheckWebCore
             {
                 AddRedirectParamsToQueryString = true,
                 DebugMode = AppSettings.Get(nameof(HostConfig.DebugMode), false),
-                UseSameSiteCookies = true, // prevents OAuth providers which use Sessions like Twitter from working
+//                UseSameSiteCookies = true, // prevents OAuth providers which use Sessions like Twitter from working
                 UseSecureCookies = true,
+                AdminAuthSecret = "secretz",
             });
 
             var cache = container.Resolve<ICacheClient>();
@@ -135,6 +145,14 @@ namespace CheckWebCore
             Svg.Load(RootDirectory.GetDirectory("/assets/svg"));
             
             Plugins.Add(new PostmanFeature());
+
+            var nativeTypesFeature = GetPlugin<NativeTypesFeature>();
+            nativeTypesFeature
+                .ExportAttribute<BindableAttribute>(attr => {
+                    var metaAttr = nativeTypesFeature.GetGenerator().ToMetadataAttribute(attr);
+                    return metaAttr;
+                });
+            
 
 //            TypeScriptGenerator.TypeFilter = (type, args) => {
 //                if (type == "ResponseBase`1" && args[0] == "Dictionary<String,List`1>")
@@ -213,6 +231,7 @@ namespace CheckWebCore
    
     public class ExtendsDictionary : Dictionary<Guid, string> {
     }
+
 
     //    [Authenticate]
     public class MyServices : Service
