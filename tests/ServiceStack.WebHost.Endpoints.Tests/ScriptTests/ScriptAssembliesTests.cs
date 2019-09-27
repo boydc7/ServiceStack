@@ -114,9 +114,19 @@ namespace ServiceStack.WebHost.Endpoints.Tests.ScriptTests
         public InternalType() { }
         public InternalType(int num) {}
     }
-    
-    public interface ICursor {}
-    public class Cursor : ICursor {}
+
+    public interface ICursor
+    {
+        string AProp { get; set; }
+        string AMethod(int arg);
+    }
+    public class Cursor : ICursor 
+    {
+        public string AProp { get; set; }
+        public string BProp { get; set; }
+        public string AMethod(int arg) => $"AMethod: {arg}";
+        public string BMethod(int arg) => $"BMethod: {arg}";
+    }
 
     public class ContentResolver
     {
@@ -627,5 +637,47 @@ namespace ServiceStack.WebHost.Endpoints.Tests.ScriptTests
             
             Assert.That(result is ICursor);
         }
+
+        [Test]
+        public void Can_Call_registered_IOC_Dependency()
+        {
+            var context = CreateContext(c => {
+                c.ScriptTypes.Add(typeof(InstanceLog));
+            }).Init();
+            context.Container.AddTransient(() => new InstanceLog("ioc"));
+            
+            string result = null;
+
+            result = context.Evaluate<string>(@"{{ resolve('InstanceLog') | to => o }}
+                {{ Function('InstanceLog.Log') | to => log }}                
+                {{ o.log('arg') }}
+                {{ Function('InstanceLog.AllLogs') | to => allLogs }}{{ o.allLogs() | return }}".NormalizeNewLines());
+            
+            Assert.That(result, Is.EqualTo("ioc arg"));
+        }
+
+        [Test]
+        public void Can_call_resolve_interface_from_registered_Dependency()
+        {
+            var context = CreateContext(c => {
+                c.ScriptNamespaces.Add(typeof(ICursor).Namespace);
+                c.AllowScriptingOfAllTypes = true;
+            });
+            context.Container.AddTransient<ICursor>(() => new Cursor());
+            context.Init();
+
+            var output = context.EvaluateCode("'ICursor'.typeof().Name | return");
+            Assert.That(output, Is.EqualTo(nameof(ICursor)));
+
+            output = context.EvaluateCode<List<string>>("resolve('ICursor').methods() | return");
+            Assert.That(output, Is.EqualTo(new[]{ "AMethod", "BMethod"}));
+
+            output = context.EvaluateCode<string>("F('ICursor.AMethod')(resolve('ICursor'), 1) | return");
+            Assert.That(output, Is.EqualTo("AMethod: 1"));
+
+            output = context.EvaluateCode<string>("F('Cursor.BMethod')(resolve('ICursor'), 2) | return");
+            Assert.That(output, Is.EqualTo("BMethod: 2"));
+        }
+
     }
 }

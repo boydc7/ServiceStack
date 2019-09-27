@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Xml.Linq;
 using Funq;
 using NUnit.Framework;
 using ServiceStack.Data;
@@ -52,6 +54,19 @@ namespace ServiceStack.WebHost.Endpoints.Tests.ScriptTests
         {
             Assert.That(eval(@"(odd? 2)"), Is.Null);
             Assert.That(eval(@"(odd? 1)"), Is.True);
+        }
+
+        [Test]
+        public void LISP_empty()
+        {
+            Assert.That(eval(@"(empty? nil)"), Is.True);
+            Assert.That(eval(@"(empty? ())"), Is.True);
+            Assert.That(eval(@"(empty? [])"), Is.True);
+            Assert.That(eval(@"(empty? (to-list []))"), Is.True);
+            
+            Assert.That(eval(@"(empty? '(1))"), Is.False);
+            Assert.That(eval(@"(empty? [1])"), Is.False);
+            Assert.That(eval(@"(empty? (to-list [1]))"), Is.False);
         }
 
         [Test]
@@ -344,6 +359,18 @@ id 1
         }
 
         [Test]
+        public void LISP_Instanceof_tests()
+        {
+            var context = LoadLispContext(c => c.AllowScriptingOfAllTypes = true);
+            object eval(string lisp) => context.EvaluateLisp($"(return (let () {lisp}))");
+            
+            Assert.That(eval("(instance? 'IEnumerable [1])"), Is.True);
+            Assert.That(eval("(instance? \"IEnumerable\" [1])"), Is.True);
+            Assert.That(eval("(instance? 'System.Collections.IEnumerable [1])"), Is.True);
+            Assert.That(eval("(instance? 'IEnumerable 1)"), Is.Null);
+        }
+
+        [Test]
         public void Can_access_db()
         {
             var context = new ScriptContext {
@@ -371,13 +398,26 @@ id 1
             Assert.That(result, Is.EqualTo(new[] { "A", "B" }));
         }
 
+        private static ScriptContext LoadLispContext(Action<ScriptContext> fn=null)
+        {
+            var context = new ScriptContext {
+                ScriptLanguages = {ScriptLisp.Language},
+                ScriptMethods = {new ProtectedScripts()},
+                ScriptNamespaces = { // same as SharpPagesFeature
+                    "System",
+                    "System.Collections",
+                    "System.Collections.Generic",
+                    "ServiceStack",
+                }
+            };
+            fn?.Invoke(context);
+            return context.Init();;
+        }
+
         [Test]
         public void Can_load_scripts()
         {
-            var context = new ScriptContext {
-                ScriptLanguages = { ScriptLisp.Language },
-                ScriptMethods = { new ProtectedScripts() },
-            }.Init();
+            var context = LoadLispContext();
             
             context.VirtualFiles.WriteFile("lib1.l", "(defn lib-calc [a b] (+ a b))");
             context.VirtualFiles.WriteFile("/dir/lib2.l", "(defn lib-calc [a b] (* a b))");
@@ -403,14 +443,25 @@ id 1
         {
 //            Lisp.AllowLoadingRemoteScripts = false; // uncomment to prevent loading remote scripts
 
-            var context = new ScriptContext {
-                ScriptLanguages = { ScriptLisp.Language },
-                ScriptMethods = { new ProtectedScripts() },
-            }.Init();
-            
+            var context = LoadLispContext();
 
             LoadLispTests(context);
             LoadLispTests(context); // load twice to check it's using cached downloaded assets
+        }
+
+//        [Test]
+        public void Can_load_parse_rss_and_evaluate_rss_feed()
+        {
+            var context = LoadLispContext(c => {
+                //c.AllowScriptingOfAllTypes = true;
+                c.ScriptTypes.Add(typeof(List<>));
+                c.ScriptTypes.Add(typeof(ObjectDictionary));
+                c.ScriptTypes.Add(typeof(XDocument));
+                c.ScriptTypes.Add(typeof(XLinqExtensions));
+            });
+
+            var result = context.EvaluateLisp(@"(load ""index:parse-rss"")(return (parse-rss (/urlContents ""https://news.ycombinator.com/rss"")))");
+            result.PrintDump();
         }
 
         private static void LoadLispTests(ScriptContext context)
@@ -435,6 +486,36 @@ id 1
             // imports all gist files and overwrites symbols where last symbol wins
             result = context.EvaluateLisp(@"(load ""index:lib-calc"")(return (lib-calc 4 5))");
             Assert.That(result, Is.EqualTo(20));
+        }
+
+//        [Test]
+        public void Can_load_src()
+        {
+            object result;
+
+            var context = LoadLispContext();
+            object eval(string lisp) => context.EvaluateLisp($"(return (let () {lisp}))");
+
+            result = eval(@"(load-src ""gist:2f14d629ba1852ee55865607f1fa2c3e/lib1.l"")");
+            result.ToString().Print();
+
+            // imports all gist files and overwrites symbols where last symbol wins
+            result = eval(@"(load-src ""gist:2f14d629ba1852ee55865607f1fa2c3e"")");
+            result.ToString().Print();
+
+            result = eval(@"(load-src ""https://gist.githubusercontent.com/gistlyn/2f14d629ba1852ee55865607f1fa2c3e/raw/95cbc5d071d9db3a96866c1a583056dd87ab5f69/lib1.l"")");
+            result.ToString().Print();
+
+            // import single file from index.md
+            result = eval(@"(load-src ""index:lib-calc/lib1.l"")");
+            result.ToString().Print();
+
+            // imports all gist files and overwrites symbols where last symbol wins
+            result = eval(@"(load-src ""index:lib-calc"")");
+            result.ToString().Print();
+            
+            result = eval(@"(load-src ""index:parse-rss"")");
+            result.ToString().Print();
         }
     }
     

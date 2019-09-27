@@ -46,15 +46,22 @@ using ServiceStack.Text.Json;
 
 namespace ServiceStack.Script
 {
-    public class ScriptLisp : ScriptLanguage, IConfigureScriptContext
+    public sealed class ScriptLisp : ScriptLanguage, IConfigureScriptContext
     {
-        public static ScriptLanguage Language = new ScriptLisp();
+        private ScriptLisp() {} // force usage of singleton
+
+        public static readonly ScriptLanguage Language = new ScriptLisp();
         
         public override string Name => "lisp";
         
         public override string LineComment => ";";
 
-        public void Configure(ScriptContext context) => Lisp.Init();
+        public void Configure(ScriptContext context)
+        {
+            Lisp.Init();
+            context.ScriptMethods.Add(new LispScriptMethods());
+            context.ScriptBlocks.Add(new DefnScriptBlock());
+        }
 
         public override List<PageFragment> Parse(ScriptContext context, ReadOnlyMemory<char> body, ReadOnlyMemory<char> modifiers)
         {
@@ -62,9 +69,9 @@ namespace ServiceStack.Script
             
             if (!modifiers.IsEmpty)
             {
-                quiet = modifiers.EqualsOrdinal("q") || modifiers.EqualsOrdinal("quiet") || modifiers.EqualsOrdinal("silent");
+                quiet = modifiers.EqualsOrdinal("q") || modifiers.EqualsOrdinal("quiet") || modifiers.EqualsOrdinal("mute");
                 if (!quiet)
-                    throw new NotSupportedException($"Unknown modifier '{modifiers.ToString()}', expected 'code|q', 'code|quiet' or 'code|silent'");
+                    throw new NotSupportedException($"Unknown modifier '{modifiers.ToString()}', expected 'code|q', 'code|quiet' or 'code|mute'");
             }
 
             return new List<PageFragment> { 
@@ -158,7 +165,55 @@ namespace ServiceStack.Script
         }
         public override int GetHashCode() => (LispStatements != null ? LispStatements.GetHashCode() : 0);
     }
+
+    public class LispScriptMethods : ScriptMethods
+    {
+        public List<string> symbols(ScriptScopeContext scope)
+        {
+            var interp = scope.GetLispInterpreter();
+            return interp.Globals.Keys.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public List<GistLink> gistindex(ScriptScopeContext scope)
+        {
+            return Lisp.Interpreter.GetGistIndexLinks(scope);
+        }
+    }
     
+    /// <summary>
+    /// Define and export a LISP function to the page
+    /// Usage: {{#defn calc [a, b] }}
+    ///           (let ( (c (* a b)) )
+    ///             (+ a b c)
+    ///           )
+    ///        {{/defn}}
+    /// </summary>
+    public class DefnScriptBlock : ScriptBlock
+    {
+        public override string Name => "defn";
+        public override ScriptLanguage Body => ScriptLanguage.Verbatim;
+        
+        public override Task WriteAsync(ScriptScopeContext scope, PageBlockFragment block, CancellationToken token)
+        {
+            // block.Argument key is unique to exact memory fragment, not string equality
+            // Parse sExpression once for all Page Results
+            var sExpr = (List<object>) scope.Context.CacheMemory.GetOrAdd(block.Argument, key => {
+
+                var literal = block.Argument.Span.ParseVarName(out var name);
+                var strName = name.ToString();
+
+                var strFragment = (PageStringFragment) block.Body[0];
+                var lispDefnAndExport =
+                    $@"(defn {block.Argument} {strFragment.Value}) (export {strName} (to-delegate {strName}))";
+                return Lisp.Parse(lispDefnAndExport);
+            });
+            
+            var interp = scope.PageResult.GetLispInterpreter(scope);
+            interp.Eval(sExpr);
+            
+            return TypeConstants.EmptyTask;
+        }
+    }
 
     /// <summary>Exception in evaluation</summary>
     public class LispEvalException: Exception 
@@ -184,6 +239,8 @@ namespace ServiceStack.Script
 
     public static class ScriptLispUtils
     {
+        public static Lisp.Interpreter GetLispInterpreter(this ScriptScopeContext scope) =>
+            scope.PageResult.GetLispInterpreter(scope);
         public static Lisp.Interpreter GetLispInterpreter(this PageResult pageResult, ScriptScopeContext scope)
         {
             if (!pageResult.Args.TryGetValue(nameof(ScriptLisp), out var oInterp))
@@ -204,8 +261,15 @@ namespace ServiceStack.Script
         public static SharpPage LispSharpPage(this ScriptContext context, string lisp) 
             => context.Pages.OneTimePage(lisp, context.PageFormats[0].Extension,p => p.ScriptLanguage = ScriptLisp.Language);
 
+        private static void AssertLisp(this ScriptContext context)
+        {
+            if (!context.ScriptLanguages.Contains(ScriptLisp.Language))
+                throw new NotSupportedException($"ScriptLisp.Language is not registered in {context.GetType().Name}.{nameof(context.ScriptLanguages)}");
+        }
+
         private static PageResult GetLispPageResult(ScriptContext context, string lisp, Dictionary<string, object> args)
         {
+            context.AssertLisp();
             PageResult pageResult = null;
             try
             {
@@ -225,13 +289,13 @@ namespace ServiceStack.Script
         public static string RenderLisp(this ScriptContext context, string lisp, Dictionary<string, object> args=null)
         {
             var pageResult = GetLispPageResult(context, lisp, args);
-            return pageResult.EvaluateScript();
+            return pageResult.RenderScript();
         }
 
         public static async Task<string> RenderLispAsync(this ScriptContext context, string lisp, Dictionary<string, object> args=null)
         {
             var pageResult = GetLispPageResult(context, lisp, args);
-            return await pageResult.EvaluateScriptAsync();
+            return await pageResult.RenderScriptAsync();
         }
 
         public static LispStatements ParseLisp(this ScriptContext context, string lisp) =>
@@ -840,7 +904,7 @@ namespace ServiceStack.Script
                 
                 this.Scope = new ScriptScopeContext(page, outputStream, args);
 
-                var output = page.EvaluateScript();
+                var output = page.RenderScript();
                 if (page.ReturnValue != null)
                 {
                     var ret = ScriptLanguage.UnwrapValue(page.ReturnValue.Result);
@@ -1126,21 +1190,13 @@ namespace ServiceStack.Script
                             : null;
                         indexName = indexName.LeftPart('/');
                         
-                        var gistIndex = DownloadCachedGist(scope, IndexGistId);
-                        if (!gistIndex.Files.TryGetValue("index.md", out var indexGistFile))
-                            throw new NotSupportedException($"IndexGistId '{IndexGistId}' does not contain index.md");
-
-                        var indexGistContents = GetGistContents(scope, indexGistFile);
-                        var indexLinks = GistLink.Parse(indexGistContents);
+                        var indexLinks = GetGistIndexLinks(scope);
                         var indexLink = indexLinks.FirstOrDefault(x => x.Name == indexName);
 
                         // If can't find named link index.md could be stale, re-download and cache
                         if (indexLink == null)
                         {
-                            gistIndex = DownloadCachedGist(scope, IndexGistId, force:true);
-                            if (!gistIndex.Files.TryGetValue("index.md", out indexGistFile))
-                                throw new NotSupportedException($"IndexGistId '{IndexGistId}' does not contain index.md");
-                            indexLinks = GistLink.Parse(indexGistContents);
+                            indexLinks = GetGistIndexLinks(scope, force: true);
                             indexLink = indexLinks.FirstOrDefault(x => x.Name == indexName);
                             
                             if (indexLink == null)
@@ -1180,7 +1236,20 @@ namespace ServiceStack.Script
                 return lisp;
             }
 
+            internal static List<GistLink> GetGistIndexLinks(ScriptScopeContext scope, bool force=false)
+            {
+                var gistIndex = DownloadCachedGist(scope, IndexGistId, force);
+                if (!gistIndex.Files.TryGetValue("index.md", out var indexGistFile))
+                    throw new NotSupportedException($"IndexGistId '{IndexGistId}' does not contain index.md");
+
+                var indexGistContents = GetGistContents(scope, indexGistFile);
+                var indexLinks = GistLink.Parse(indexGistContents);
+                return indexLinks;
+            }
+
             private static bool IsTruncated(GistFile f) => (string.IsNullOrEmpty(f.Content) || f.Content.Length < f.Size) && f.Truncated;
+
+            private static long gensymCounter = 0;
 
             public void InitGlobals()
             {
@@ -1197,7 +1266,6 @@ namespace ServiceStack.Script
                             : throw new LispEvalException("not a string or symbol name", a[0]);
 
                     var cacheKey = nameof(Lisp) + ":load:" + path;
-                    scope.Context.Cache.TryRemove(cacheKey, out _);
                     var importSymbols = (Dictionary<Sym, object>) scope.Context.Cache.GetOrAdd(cacheKey, k => {
 
                         var span = lispContents(scope, path);
@@ -1219,6 +1287,19 @@ namespace ServiceStack.Script
                         I.Globals[importSymbol.Key] = importSymbol.Value;
                     }
                     return null;
+                });
+                
+                Def("load-src", 1, (I, a) => {
+                    var scope = I.AssertScope();
+
+                    var path = a[0] is string s
+                        ? s
+                        : a[0] is Sym sym
+                            ? sym.Name + ".l"
+                            : throw new LispEvalException("not a string or symbol name", a[0]);
+                    
+                    var span = lispContents(scope, path);
+                    return span.ToString();
                 });
 
                 Def("error", 1, a => throw new Exception(((string)a[0])));
@@ -1509,11 +1590,14 @@ namespace ServiceStack.Script
                 Def("string-downcase", 1, a => 
                     (a[0] is string s) ? s.ToLower() : a[0] != null ? throw new Exception("not a string") : "");
                 Def("string-upcase", 1, a => (a[0] is string s) ? s.ToUpper() : a[0] != null ? throw new LispEvalException("not a string", a[0]) : "");
-                Def("string?", 1, a => (a[0] is string) ? TRUE : null);
-                Def("number?", 1, a => (DynamicNumber.IsNumber(a[0]?.GetType())) ? TRUE : null);
-                Def("eql", 2, a => ((a[0] == null) ? ((a[1] == null) ?
-                                                      TRUE : null) :
-                                    a[0].Equals(a[1]) ? TRUE : null));
+                Def("string?", 1, a => a[0] is string ? TRUE : null);
+                Def("number?", 1, a => DynamicNumber.IsNumber(a[0]?.GetType()) ? TRUE : null);
+                Def("instance?", 2, (I, a) => I.AssertScope().Context.DefaultMethods.instanceOf(a[1], a[0] is Sym s ? s.Name : a[0]) ? TRUE : null);
+                Def("eql", 2, a => a[0] == null 
+                    ? a[1] == null 
+                        ? TRUE : null 
+                        : a[0].Equals(a[1]) 
+                        ? TRUE : null);
                 Def("<", 2, a => a[0].compareTo(a[1]) < 0 ? TRUE : null);
 
                 Def("%", 2, a =>  DynamicNumber.Mod(a[0], a[1]));
@@ -1752,10 +1836,11 @@ namespace ServiceStack.Script
                 Def("debug", 0, a =>
                     Globals.Keys.Aggregate((Cell) null, (x, y) => new Cell(y, x)));
                 
-                Def("symbols", 0, a => 
-                    Globals.Keys.Map(x => x.Name).OrderBy(x => x));
-                Def("show-symbols", 0, a => 
-                    Globals.Keys.Map(x => x.Name).OrderBy(x => x).Join("\n"));
+                //use symbols script method
+                //Def("symbols", 0, a =>  Globals.Keys.Map(x => x.Name).OrderBy(x => x).ToArray());
+                
+                //Use gistindex script method
+                //Def("gist-index", 0, (I, a) => GetGistIndexLinks(I.AssertScope()));
                 
                 Def("prin1", 1, (I, a) => {
                         print(I, Str(a[0], true)); 
@@ -1773,14 +1858,22 @@ namespace ServiceStack.Script
                 var gensymCounterSym = Sym.New("*gensym-counter*");
                 Globals[gensymCounterSym] = 1.0;
                 Def("gensym", 0, a => {
-                        double x = DynamicDouble.Instance.Convert(Globals[gensymCounterSym]);
-                        Globals[gensymCounterSym] = x + 1.0;
+                        var x = Interlocked.Increment(ref gensymCounter);
+                        Globals[gensymCounterSym] = x;
                         return new Sym($"G{(int) x}");
                     });
 
                 Def("make-symbol", 1, a => new Sym((string) a[0]));
                 Def("intern", 1, a => Sym.New((string) a[0]));
                 Def("symbol-name", 1, a => ((Sym) a[0]).Name);
+                Def("symbol-type", 1, a => {
+                    var sym = a[0] as Sym ?? (a[0] is string s
+                        ? Sym.New(s)
+                        : throw new LispEvalException("Expected Symbol or Symbol Name", a[0]));
+                    if (Globals.TryGetValue(sym, out var value) && value != null)
+                        return value.GetType().Name;
+                    return "nil";
+                });
 
                 Def("apply", 2, a => a[1] is Cell c 
                     ? Eval(new Cell(a[0], MapCar(c, QqQuote)), null)
@@ -1792,8 +1885,8 @@ namespace ServiceStack.Script
                     });
 
                 Globals[Sym.New("*version*")] =
-                    new Cell(1.2d,
-                             new Cell("C# 7", new Cell("Nukata Lisp Light", null)));
+                    new Cell(Env.ServiceStackVersion,
+                             new Cell("#Script Lisp", new Cell("based on Nukata Lisp Light v1.2", null)));
             }
 
             /// <summary>Define a built-in function by a name, an arity,
@@ -2967,6 +3060,7 @@ namespace ServiceStack.Script
         public static void RunRepl(ScriptContext context)
         {
             //remove sandbox restrictions
+            bool breakLoop = false;
             context.MaxQuota = int.MaxValue;
             context.MaxEvaluations = long.MaxValue;
             
@@ -2978,13 +3072,26 @@ namespace ServiceStack.Script
             Console.SetOut(sw);
             using (sw)
             {
-                for (;;) {
+                while (!breakLoop)
+                {
                     interp.COut.Write("> ");
                     try
                     {
                         var sb = new StringBuilder();
 
-                        sb.AppendLine(Console.ReadLine());
+                        var line = Console.ReadLine();
+                        if (line == "clear")
+                        {
+                            Console.Clear();
+                            continue;
+                        }
+                        if (line == "quit" || line == "exit")
+                        {
+                            Console.WriteLine($"Goodbye.\n\n");
+                            return;
+                        }
+                        
+                        sb.AppendLine(line);
                         while (Console.KeyAvailable) 
                             sb.AppendLine(Console.ReadLine());
 
@@ -3186,7 +3293,7 @@ setcdr rplacd)
         /// </summary>
         public const string LispCore = @"
 (defmacro def (k v) 
-    (list 'progn (list 'setq k v) ))
+    (list 'progn (list 'setq k v) nil ))
 
 (defmacro incf (elem &rest num)
   (cond
@@ -3361,8 +3468,9 @@ setcdr rplacd)
 (defun assoc-key (k L) (first (assoc k L)))
 (defun assoc-value (k L) (second (assoc k L)))
 
-(defun even? (n) (= (% n 2) 0))
-(defun odd? (n) (= (% n 2) 1))
+(defn even?  [n] (= (% n 2) 0))
+(defn odd?   [n] (= (% n 2) 1))
+(defn empty? [x] (not (and x (seq? x) (> (count x) 0) )))
 
 (defun flatmap (f L)
   (flatten (map f L)))

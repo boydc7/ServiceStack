@@ -13,8 +13,10 @@ namespace ServiceStack.Script
     /// Inverse of the #Script Language Template Syntax where each line is a statement
     /// i.e. in contrast to #Script's default where text contains embedded template expressions {{ ... }} 
     /// </summary>
-    public class ScriptCode : ScriptLanguage
+    public sealed class ScriptCode : ScriptLanguage
     {
+        private ScriptCode() {} // force usage of singleton
+
         public static readonly ScriptLanguage Language = new ScriptCode();
         
         public override string Name => "code";
@@ -25,9 +27,9 @@ namespace ServiceStack.Script
             
             if (!modifiers.IsEmpty)
             {
-                quiet = modifiers.EqualsOrdinal("q") || modifiers.EqualsOrdinal("quiet") || modifiers.EqualsOrdinal("silent");
+                quiet = modifiers.EqualsOrdinal("q") || modifiers.EqualsOrdinal("quiet") || modifiers.EqualsOrdinal("mute");
                 if (!quiet)
-                    throw new NotSupportedException($"Unknown modifier '{modifiers.ToString()}', expected 'code|q', 'code|quiet' or 'code|silent'");
+                    throw new NotSupportedException($"Unknown modifier '{modifiers.ToString()}', expected 'code|q', 'code|quiet' or 'code|mute'");
             }
             
             var statements = context.ParseCodeStatements(body);
@@ -102,8 +104,15 @@ namespace ServiceStack.Script
         public static SharpPage CodeSharpPage(this ScriptContext context, string code) 
             => context.Pages.OneTimePage(code, context.PageFormats[0].Extension,p => p.ScriptLanguage = ScriptCode.Language);
 
+        private static void AssertCode(this ScriptContext context)
+        {
+            if (!context.ScriptLanguages.Contains(ScriptCode.Language))
+                throw new NotSupportedException($"ScriptCode.Language is not registered in {context.GetType().Name}.{nameof(context.ScriptLanguages)}");
+        }
+
         private static PageResult GetCodePageResult(ScriptContext context, string code, Dictionary<string, object> args)
         {
+            context.AssertCode();
             PageResult pageResult = null;
             try
             {
@@ -123,13 +132,13 @@ namespace ServiceStack.Script
         public static string RenderCode(this ScriptContext context, string code, Dictionary<string, object> args=null)
         {
             var pageResult = GetCodePageResult(context, code, args);
-            return pageResult.EvaluateScript();
+            return pageResult.RenderScript();
         }
 
         public static async Task<string> RenderCodeAsync(this ScriptContext context, string code, Dictionary<string, object> args=null)
         {
             var pageResult = GetCodePageResult(context, code, args);
-            return await pageResult.EvaluateScriptAsync();
+            return await pageResult.RenderScriptAsync();
         }
 
         public static JsBlockStatement ParseCode(this ScriptContext context, string code) =>

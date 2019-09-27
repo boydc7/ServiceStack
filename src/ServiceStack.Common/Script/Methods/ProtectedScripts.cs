@@ -22,6 +22,18 @@ namespace ServiceStack.Script
     public class ProtectedScripts : ScriptMethods
     {
         public static readonly ProtectedScripts Instance = new ProtectedScripts();
+
+        public object resolve(ScriptScopeContext scope, object type)
+        {
+            if (type == null)
+                return null;
+            var t = type as Type ?? (type is string s
+                        ? @typeof(s)
+                        : throw new NotSupportedException($"{nameof(resolve)} requires a Type or Type Name, received '{type.GetType().Name}'"));
+
+            var instance = scope.Context.Container.Resolve(t);
+            return instance;
+        }
         
         public object @new(string typeName)
         {
@@ -184,11 +196,25 @@ namespace ServiceStack.Script
             return StringBuilderCache.ReturnAndFree(sb);
         }
 
+        public static string TypeNotFoundErrorMessage(string typeName) => $"Could not resolve Type '{typeName}'. " +
+            $"Use ScriptContext.ScriptAssemblies or ScriptContext.AllowScriptingOfAllTypes + ScriptNamespaces to increase Type resolution";
+        
+        public Type assertTypeOf(string name)
+        {
+            var type = @typeof(name);
+            if (type == null)
+                throw new NotSupportedException(TypeNotFoundErrorMessage(name));
+            return type;
+        }
+
+
         /// <summary>
         /// Returns Type from type name syntax of .NET's typeof() 
         /// </summary>
         public Type @typeof(string typeName)
         {
+            typeName = typeName?.Trim();
+            
             if (string.IsNullOrEmpty(typeName))
                 return null;
             
@@ -437,7 +463,7 @@ namespace ServiceStack.Script
             var name = isGeneric ? methodName.LeftPart('<') : methodName;
 
             var genericArgs = isGeneric
-                ? typeGenericArgs(name)
+                ? typeGenericArgs(methodName)
                 : TypeConstants.EmptyStringList;
             var genericArgsCount = genericArgs.Count;
 
@@ -563,9 +589,7 @@ namespace ServiceStack.Script
 
                 name = name.LastLeftPart('(');
 
-                var type = @typeof(name);
-                if (type == null)
-                    throw new NotSupportedException(TypeNotFoundErrorMessage(name));
+                var type = assertTypeOf(name);
 
                 var ctor = ResolveConstructor(type, argTypes);
 
@@ -686,9 +710,7 @@ namespace ServiceStack.Script
                 }
             }
 
-            var type = @typeof(typeName);
-            if (type == null)
-                throw new NotSupportedException(TypeNotFoundErrorMessage(typeName));
+            var type = assertTypeOf(typeName);
 
             var method = ResolveMethod(type, methodName, argTypes, argTypes?.Length, out var fn);
             return fn ?? method.GetInvokerDelegate();
@@ -696,9 +718,6 @@ namespace ServiceStack.Script
 
         static string MethodNotExists(string methodName) => $"Method {methodName} does not exist"; 
 
-        public static string TypeNotFoundErrorMessage(string typeName) => $"Could not resolve Type '{typeName}'. " +
-            $"Use ScriptContext.ScriptAssemblies or ScriptContext.AllowScriptingOfAllTypes+ScriptNamespaces to increase Type resolution";
-        
         public MemoryVirtualFiles vfsMemory() => new MemoryVirtualFiles();
 
         public FileSystemVirtualFiles vfsFileSystem(string dirPath) => new FileSystemVirtualFiles(dirPath);
@@ -1176,7 +1195,77 @@ namespace ServiceStack.Script
             .Map(x => x.Name);
 
         public List<string> scriptMethodSignatures(ScriptScopeContext scope) => scriptMethods(scope)
-            .Map(x => x.DisplaySignature);
+            .Map(x => x.Signature);
+
+        private ScriptMethodInfo[] filterMethods(MethodInfo[] methodInfos) =>
+            methodInfos.Where(m => !m.IsSpecialName && m.DeclaringType != typeof(object))
+                .Select(ScriptMethodInfo.Create).ToArray();
+        public List<string> methods(object o)
+        {
+            if (o == null)
+                return TypeConstants.EmptyStringList;
+
+            var mis = methodTypes(o);
+            return mis.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public ScriptMethodInfo[] methodTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<ScriptMethodInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return filterMethods(type.GetInstanceMethods());
+        }
+        
+        public List<string> staticMethods(object o)
+        {
+            if (o == null)
+                return TypeConstants.EmptyStringList;
+
+            var mis = staticMethodTypes(o);
+            return mis.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public ScriptMethodInfo[] staticMethodTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<ScriptMethodInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return filterMethods(type.GetMethods(BindingFlags.Static | BindingFlags.Public));
+        }
+
+        public ScriptMethodInfo[] allMethodTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<ScriptMethodInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return type.GetMethods(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Select(ScriptMethodInfo.Create).ToArray();
+        }
+
+        public MemberInfo[] allMemberInfos(object o)
+        {
+            if (o == null)
+                return TypeConstants<MemberInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return type.GetMembers(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        }
         
         static readonly string[] AllCacheNames = {
             nameof(ScriptContext.Cache),

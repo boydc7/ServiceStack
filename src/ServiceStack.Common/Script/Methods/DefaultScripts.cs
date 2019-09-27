@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using ServiceStack.Text;
 using ServiceStack.Text.Json;
@@ -324,6 +325,29 @@ namespace ServiceStack.Script
         public bool isDto(object target) => target?.GetType().IsDto() == true;
         public bool isTuple(object target) => target?.GetType().IsTuple() == true;
         public bool isKeyValuePair(object target) => "KeyValuePair`2".Equals(target?.GetType().Name);
+
+        public bool instanceOf(object target, object type)
+        {
+            if (target == null || type == null)
+                return target == type;
+            
+            Type t = null;
+            if (type is string typeName)
+            {
+                var protectedScripts = Context.ProtectedMethods;
+                if (protectedScripts != null)
+                    t = protectedScripts.assertTypeOf(typeName);
+                else
+                    return target.GetType().Name == typeName;
+            }
+            if (t == null)
+            {
+                t = type as Type
+                    ?? throw new NotSupportedException($"{nameof(instanceOf)} expects Type or Type Name but was {type.GetType().Name}");
+            }
+
+            return t.IsInstanceOfType(target);
+        }
 
         public int length(object target) => target is IEnumerable e ? e.Cast<object>().Count() : 0;
 
@@ -753,6 +777,7 @@ namespace ServiceStack.Script
             }
 
             pageParams["it"] = pageParams;
+            pageParams[ScriptConstants.PartialArg] = page;
 
             await scope.WritePageAsync(page, codePage, pageParams);
         }
@@ -969,6 +994,90 @@ namespace ServiceStack.Script
             return TypeConstants.EmptyTask;
         }
 
+        public List<string> props(object o)
+        {
+            if (o == null)
+                return TypeConstants.EmptyStringList;
+
+            var pis = propTypes(o);
+            return pis.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public PropertyInfo[] propTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<PropertyInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return type.GetPublicProperties();
+        }
+
+        public List<string> staticProps(object o)
+        {
+            if (o == null)
+                return TypeConstants.EmptyStringList;
+
+            var pis = staticPropTypes(o);
+            return pis.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public PropertyInfo[] staticPropTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<PropertyInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return type.GetProperties(BindingFlags.Static | BindingFlags.Public);
+        }
+
+        public List<string> fields(object o)
+        {
+            if (o == null)
+                return TypeConstants.EmptyStringList;
+
+            var fis = fieldTypes(o);
+            return fis.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public FieldInfo[] fieldTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<FieldInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return type.GetPublicFields();
+        }
+
+        public List<string> staticFields(object o)
+        {
+            if (o == null)
+                return TypeConstants.EmptyStringList;
+
+            var fis = staticFieldTypes(o);
+            return fis.Map(x => x.Name).OrderBy(x => x).ToList();
+        }
+
+        public FieldInfo[] staticFieldTypes(object o)
+        {
+            if (o == null)
+                return TypeConstants<FieldInfo>.EmptyArray;
+            
+            var type = o is Type t
+                ? t
+                : o.GetType();
+
+            return type.GetFields(BindingFlags.Static | BindingFlags.Public);
+        }
+
         public object property(object target, string propertyName)
         {
             if (isNull(target))
@@ -1177,6 +1286,8 @@ namespace ServiceStack.Script
                     pageParams[pageArg.Key] = pageArg.Value;
                 }
             }
+            
+            pageParams[ScriptConstants.PartialArg] = page;
 
             if (target is IEnumerable objs && !(target is IDictionary) && !(target is string))
             {
@@ -1468,6 +1579,7 @@ namespace ServiceStack.Script
 
             return value;
         }
+        public object sync(object value) => unwrap(value);
     }
 
     public partial class DefaultScripts //Methods named after common keywords breaks intelli-sense when trying to use them        

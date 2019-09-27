@@ -15,8 +15,10 @@ namespace ServiceStack.Script
     /// <summary>
     /// #Script Language which processes ```lang ... ``` blocks
     /// </summary>
-    public class SharpScript : ScriptLanguage
+    public sealed class SharpScript : ScriptLanguage
     {
+        private SharpScript() {} // force usage of singleton
+
         public static readonly ScriptLanguage Language = new SharpScript();
 
         public override string Name => "script";
@@ -30,8 +32,10 @@ namespace ServiceStack.Script
     /// <summary>
     /// The #Script Default Template Language (does not process ```lang ... ``` blocks)
     /// </summary>
-    public class ScriptTemplate : ScriptLanguage
+    public sealed class ScriptTemplate : ScriptLanguage
     {
+        private ScriptTemplate() {} // force usage of singleton
+
         public static readonly ScriptLanguage Language = new ScriptTemplate();
         
         public override string Name => "template";
@@ -50,7 +54,8 @@ namespace ServiceStack.Script
             }
             else if (fragment is PageVariableFragment var)
             {
-                if (var.Binding?.Equals(ScriptConstants.Page) == true)
+                if (var.Binding?.Equals(ScriptConstants.Page) == true
+                    && !scope.ScopedParams.ContainsKey(ScriptConstants.PartialArg))
                 {
                     await scope.PageResult.WritePageAsync(scope.PageResult.Page, scope.PageResult.CodePage, scope, token);
 
@@ -76,6 +81,20 @@ namespace ServiceStack.Script
     public static class ScriptTemplateUtils
     {
         /// <summary>
+        /// Create SharpPage configured to use #Script 
+        /// </summary>
+        public static SharpPage SharpScriptPage(this ScriptContext context, string code) 
+            => context.Pages.OneTimePage(code, context.PageFormats[0].Extension,
+                p => p.ScriptLanguage = SharpScript.Language);
+
+        /// <summary>
+        /// Create SharpPage configured to use #Script Templates 
+        /// </summary>
+        public static SharpPage TemplateSharpPage(this ScriptContext context, string code) 
+            => context.Pages.OneTimePage(code, context.PageFormats[0].Extension,
+                p => p.ScriptLanguage = ScriptTemplate.Language);
+
+        /// <summary>
         /// Render #Script output to string
         /// </summary>
         public static string RenderScript(this ScriptContext context, string script, out ScriptException error) => 
@@ -96,7 +115,7 @@ namespace ServiceStack.Script
         /// </summary>
         public static string EvaluateScript(this ScriptContext context, string script, Dictionary<string, object> args, out ScriptException error)
         {
-            var pageResult = new PageResult(context.OneTimePage(script));
+            var pageResult = new PageResult(context.SharpScriptPage(script));
             args.Each((x,y) => pageResult.Args[x] = y);
             try { 
                 var output = pageResult.Result;
@@ -121,9 +140,9 @@ namespace ServiceStack.Script
         /// </summary>
         public static string EvaluateScript(this ScriptContext context, string script, Dictionary<string, object> args=null)
         {
-            var pageResult = new PageResult(context.OneTimePage(script));
+            var pageResult = new PageResult(context.SharpScriptPage(script));
             args.Each((x,y) => pageResult.Args[x] = y);
-            return pageResult.EvaluateScript();
+            return pageResult.RenderScript();
         }
 
         /// <summary>
@@ -136,9 +155,9 @@ namespace ServiceStack.Script
         /// </summary>
         public static async Task<string> EvaluateScriptAsync(this ScriptContext context, string script, Dictionary<string, object> args=null)
         {
-            var pageResult = new PageResult(context.OneTimePage(script));
+            var pageResult = new PageResult(context.SharpScriptPage(script));
             args.Each((x,y) => pageResult.Args[x] = y);
-            return await pageResult.EvaluateScriptAsync();
+            return await pageResult.RenderScriptAsync();
         }
         
         /// <summary>
@@ -152,7 +171,7 @@ namespace ServiceStack.Script
         /// </summary>
         public static object Evaluate(this ScriptContext context, string script, Dictionary<string, object> args=null)
         {
-            var pageResult = new PageResult(context.OneTimePage(script));
+            var pageResult = new PageResult(context.SharpScriptPage(script));
             args.Each((x,y) => pageResult.Args[x] = y);
 
             if (!pageResult.EvaluateResult(out var returnValue))
@@ -172,7 +191,7 @@ namespace ServiceStack.Script
         /// </summary>
         public static async Task<object> EvaluateAsync(this ScriptContext context, string script, Dictionary<string, object> args=null)
         {
-            var pageResult = new PageResult(context.OneTimePage(script));
+            var pageResult = new PageResult(context.SharpScriptPage(script));
             args.Each((x,y) => pageResult.Args[x] = y);
 
             var ret = await pageResult.EvaluateResultAsync();
@@ -322,7 +341,7 @@ namespace ServiceStack.Script
 
                 if (line.StartsWith("```"))
                 {
-                    if (startBlockPos >= 0 && line.Slice(delim).AdvancePastWhitespace().IsEmpty) //is end block
+                    if (scriptLanguage != null && startBlockPos >= 0 && line.Slice(delim).AdvancePastWhitespace().IsEmpty) //is end block
                     {
                         var templateFragments = ScriptTemplate.Language.Parse(context, prevBlock);
                         to.AddRange(templateFragments);
@@ -339,7 +358,7 @@ namespace ServiceStack.Script
                         continue;
                     }
 
-                    if (line.SafeGetChar(delim + 1).IsValidVarNameChar())
+                    if (line.SafeGetChar(delim).IsValidVarNameChar())
                     {
                         line = line.Slice(delim).ParseVarName(out var blockNameSpan);
 
@@ -401,20 +420,25 @@ namespace ServiceStack.Script
                 if (text.Span.SafeCharEquals(varStartPos - 1, '|')) // lang expression syntax {|lang ... |} https://flow.org/en/docs/types/objects/#toc-exact-object-types
                 {
                     var literal = text.Slice(varStartPos);
-                    literal = literal.ParseVarName(out var langSpan);
-                    
-                    var lang = context.GetScriptLanguage(langSpan.ToString());
-                    if (lang != null)
-                    {
-                        var endPos = literal.IndexOf("|}");
-                        if (endPos == -1)
-                            throw new SyntaxErrorException($"Unterminated '|}}' expression, near '{text.Slice(varStartPos).DebugLiteral()}'");
 
-                        var exprStr = literal.Slice(0, endPos);
-                        var langExprFragment = lang.Parse(context, exprStr);
-                        to.AddRange(langExprFragment);
+                    ScriptLanguage lang = null;
+                    if (literal.SafeGetChar(0).IsValidVarNameChar())
+                    {
+                        literal = literal.ParseVarName(out var langSpan);
+                    
+                        lang = context.GetScriptLanguage(langSpan.ToString());
+                        if (lang != null)
+                        {
+                            var endPos = literal.IndexOf("|}");
+                            if (endPos == -1)
+                                throw new SyntaxErrorException($"Unterminated '|}}' expression, near '{text.Slice(varStartPos).DebugLiteral()}'");
+
+                            var exprStr = literal.Slice(0, endPos);
+                            var langExprFragment = lang.Parse(context, exprStr);
+                            to.AddRange(langExprFragment);
+                        }
                     }
-                    else
+                    if (lang == null)
                     {
                         var nextLastPos = text.IndexOf("|}", varStartPos) + 2;
                         block = text.Slice(pos, nextLastPos - pos);
@@ -457,7 +481,7 @@ namespace ServiceStack.Script
                         literal = literal.AdvancePastWhitespace();
                         if (literal.FirstCharEquals(FilterSep))
                         {
-                            literal = literal.Advance(1);
+                            literal = literal.AdvancePastPipeOperator();
 
                             while (true)
                             {
@@ -478,13 +502,15 @@ namespace ServiceStack.Script
 
                                 if (!literal.FirstCharEquals(FilterSep))
                                     throw new SyntaxErrorException(
-                                        $"Expected filter separator '|' but was {literal.DebugFirstChar()}");
+                                        $"Expected pipeline operator '|>' but was {literal.DebugFirstChar()}");
 
-                                literal = literal.Advance(1);
+                                literal = literal.AdvancePastPipeOperator();
                             }
                         }
                         else
                         {
+                            // No valid syntax reaches here
+                            System.Diagnostics.Debug.Fail("Syntax Error? Expected pipeline operator '|>'");
                             if (!literal.IsNullOrEmpty())
                                 literal = literal.Advance(1);
                         }

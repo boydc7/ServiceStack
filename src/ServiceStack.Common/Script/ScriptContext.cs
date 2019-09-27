@@ -448,6 +448,15 @@ namespace ServiceStack.Script
             Container.AddSingleton(() => this);
             Container.AddSingleton(() => Pages);
 
+            ScriptLanguagesArray = ScriptLanguages.Distinct().ToArray();
+            foreach (var scriptLanguage in ScriptLanguagesArray)
+            {
+                scriptLanguagesMap[scriptLanguage.Name] = scriptLanguage;
+                
+                if (scriptLanguage is IConfigureScriptContext init)
+                    init.Configure(this);
+            }
+
             var beforePlugins = Plugins.OfType<IScriptPluginBefore>();
             foreach (var plugin in beforePlugins)
             {
@@ -482,15 +491,6 @@ namespace ServiceStack.Script
             {
                 InitBlock(block);
                 blocksMap[block.Name] = block;
-            }
-
-            ScriptLanguagesArray = ScriptLanguages.Distinct().ToArray();
-            foreach (var scriptLanguage in ScriptLanguagesArray)
-            {
-                scriptLanguagesMap[scriptLanguage.Name] = scriptLanguage;
-                
-                if (scriptLanguage is IConfigureScriptContext init)
-                    init.Configure(this);
             }
 
             ScriptNamespaces = ScriptNamespaces.Distinct().ToList();
@@ -730,7 +730,7 @@ namespace ServiceStack.Script
             }
         }
 
-        public static string EvaluateScript(this PageResult pageResult)
+        public static string RenderScript(this PageResult pageResult)
         {
             try
             {
@@ -749,7 +749,7 @@ namespace ServiceStack.Script
             }
         }
 
-        public static async Task<string> EvaluateScriptAsync(this PageResult pageResult, CancellationToken token = default)
+        public static async Task<string> RenderScriptAsync(this PageResult pageResult, CancellationToken token = default)
         {
             try
             {

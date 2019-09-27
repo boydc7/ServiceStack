@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml;
+using System.Xml.Linq;
 using NUnit.Framework;
+using ServiceStack.Logging;
 using ServiceStack.Script;
 using ServiceStack.Text;
 
@@ -316,7 +319,8 @@ Global: {{ retVal + newVal }}
         {
             var context = LispScriptContext();
 
-            var output = context.EvaluateScript(@"
+            string output;
+            output = context.EvaluateScript(@"
 {{ 1 | to => scopeArg }}
 ```lisp|q
 (setq  lispArg  2)
@@ -329,9 +333,10 @@ Global: {{ lispAdd(scopeArg, exportedArg) }}
 ");
             Assert.That(output.NormalizeNewLines(), Is.EqualTo("Global: 6"));
 
+            // def returns null output
             output = context.EvaluateScript(@"
 {{ 1 | to => scopeArg }}
-```lisp|q
+```lisp
 (def lispArg  2)
 (def localArg 3)
 (def lispAdd  #(+ %1 %2 localArg))
@@ -346,7 +351,7 @@ Global: {{ lispAdd(scopeArg, exportedArg) }}
 
 
         [Test]
-        public void Does_support_silent_blocks()
+        public void Does_support_quiet_blocks()
         {
             var context = LispScriptContext(new ObjectDictionary { ["contextArg"] = 1 });
             
@@ -425,6 +430,8 @@ SUM: {{ sum }}
                 AllowScriptingOfAllTypes = true,
                 ScriptNamespaces = {
                     "System",
+                    "System.Collections.Generic",
+                    "ServiceStack",
                     typeof(StaticLog).Namespace,
                 },
                 ScriptTypes = {
@@ -580,6 +587,43 @@ C
         }
 
         [Test]
+        public void Can_create_generic_types_LISP()
+        {
+            var context = LispNetContext();
+
+            object eval(string lisp) => context.EvaluateLisp($"(return (let () {lisp}))");
+            
+            Assert.That(eval(@"((/C ""Tuple<String,int>(String,int)"") ""A"" 1)"), 
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+            Assert.That(eval(@"(C ""Tuple<String,int>(String,int)"" ""A"" 1)"),
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+            
+            Assert.That(eval(@"((/C ""Tuple< String, int >( String, int )"") ""A"" 1)"), 
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+            Assert.That(eval(@"(C ""Tuple< String, int >( String, int )"" ""A"" 1)"),
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+        }
+
+        [Test]
+        public void Can_call_generic_methods_LISP()
+        {
+            
+            var context = LispNetContext();
+
+            object eval(string lisp) => context.EvaluateLisp($"(return (let () {lisp}))");
+            
+            Assert.That(eval(@"((/F ""Tuple.Create<String,int>(String,int)"") ""A"" 1)"), 
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+            Assert.That(eval(@"(F ""Tuple.Create<String,int>(String,int)"" ""A"" 1)"),
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+            
+            Assert.That(eval(@"((/F ""Tuple.Create< String , int >( String , int )"") ""A"" 1)"), 
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+            Assert.That(eval(@"(F ""Tuple.Create< String , int >( String , int )"" ""A"" 1)"),
+                Is.EqualTo(new Tuple<string, int>("A", 1)));
+        }
+
+        [Test]
         public void Can_create_type_with_constructor_arguments_LISP()
         {
             var context = LispNetContext();
@@ -617,6 +661,24 @@ C
 
             Assert.That(context.EvaluateLisp<string>("(return (.InstanceProp1 o1))"), Is.EqualTo("StaticLog.Inner1.InstanceProp1"));
             Assert.That(context.EvaluateLisp<string>("(return (.InstanceField1 o1))"), Is.EqualTo("StaticLog.Inner1.InstanceField1"));
+        }
+
+        [Test]
+        public void Can_Call_registered_IOC_Dependency_LISP()
+        {
+            var context = LispNetContext();
+            context.ScriptTypes.Add(typeof(InstanceLog));
+            context.Container.AddTransient(() => new InstanceLog("ioc"));
+            context.Init();
+            
+            object eval(string lisp) => context.EvaluateLisp($"(return (let () {lisp}))");
+
+            var result = eval(@"
+                (def o (/resolve ""InstanceLog""))
+                (.Log o ""arg"")
+                (.AllLogs o)".NormalizeNewLines());
+            
+            Assert.That(result, Is.EqualTo("ioc arg"));
         }
 
         [Test]
@@ -834,6 +896,129 @@ C
             }
             catch (LispEvalException e) {}
         }
+
+        // https://news.ycombinator.com/rss
+        private const string rss = @"<rss version=""2.0"">
+    <channel>
+        <title>Hacker News</title>
+        <link>https://news.ycombinator.com/</link>
+        <description>Links for the intellectually curious, ranked by readers.</description>
+        <item>
+            <title>Breaking Pills</title>
+            <link>https://blog.plover.com/math/breaking-pills.html</link>
+            <pubDate>Fri, 20 Sep 2019 07:57:54 +0000</pubDate>
+            <comments>https://news.ycombinator.com/item?id=21024224</comments>
+        </item>
+        <item>
+            <title>A Gentle introduction to Kubernetes with more than just the basics</title>
+            <link>https://github.com/eon01/kubernetes-workshop</link>
+            <pubDate>Thu, 19 Sep 2019 22:04:14 +0000</pubDate>
+            <comments>https://news.ycombinator.com/item?id=21021184</comments>
+        </item>
+        <item>
+            <title>EasyOS: An experimental Linux distribution designed from scratch for containers</title>
+            <link>https://easyos.org</link>
+            <pubDate>Fri, 20 Sep 2019 07:17:07 +0000</pubDate>
+            <comments>https://news.ycombinator.com/item?id=21023989</comments>
+        </item>
+    </channel>
+</rss>";
+
+        private ObjectDictionary expected = new ObjectDictionary {
+            ["title"] = "Hacker News",
+            ["link"] = "https://news.ycombinator.com/",
+            ["description"] = "Links for the intellectually curious, ranked by readers.",
+            ["items"] = new List<ObjectDictionary> {
+                new ObjectDictionary {
+                    ["title"] = "Breaking Pills",
+                    ["link"] = "https://blog.plover.com/math/breaking-pills.html",
+                    ["pubDate"] = "Fri, 20 Sep 2019 07:57:54 +0000",
+                    ["comments"] = "https://news.ycombinator.com/item?id=21024224",
+                },
+                new ObjectDictionary {
+                    ["title"] = "A Gentle introduction to Kubernetes with more than just the basics",
+                    ["link"] = "https://github.com/eon01/kubernetes-workshop",
+                    ["pubDate"] = "Thu, 19 Sep 2019 22:04:14 +0000",
+                    ["comments"] = "https://news.ycombinator.com/item?id=21021184",
+                },
+                new ObjectDictionary {
+                    ["title"] = "EasyOS: An experimental Linux distribution designed from scratch for containers",
+                    ["link"] = "https://easyos.org",
+                    ["pubDate"] = "Fri, 20 Sep 2019 07:17:07 +0000",
+                    ["comments"] = "https://news.ycombinator.com/item?id=21023989",
+                },
+            },
+        };
+
+        [Test]
+        public void Can_parse_rss_LISP()
+        {
+            ConsoleLogFactory.Configure();
+            var context = LispNetContext(new Dictionary<string, object> {
+                ["rss"] = rss
+            }).Init();
+
+            object eval(string lisp) => context.EvaluateLisp($"(return (let () {lisp}))");
+
+            var result = eval(@"
+(defn parse-rss [xml]
+    (let ( (to) (doc) (channel) (items) (el) )
+        (def doc (System.Xml.Linq.XDocument/Parse xml))
+        (def to  (ObjectDictionary.))
+        (def items (List<ObjectDictionary>.))
+        (def channel (first (.Descendants doc ""channel"")))
+        (def el  (XLinqExtensions/FirstElement channel))
+
+        (while (not= (.LocalName (.Name el)) ""item"")
+            (.Add to (.LocalName (.Name el)) (.Value el))
+            (def el (XLinqExtensions/NextElement el)))
+
+        (doseq (elItem (.Descendants channel ""item""))
+            (def item (ObjectDictionary.))
+            (def el (XLinqExtensions/FirstElement elItem))
+            
+            (while el
+                (.Add item (.LocalName (.Name el)) (.Value el))
+                (def el (XLinqExtensions/NextElement el)))
+            
+            (.Add items item))
+
+        (.Add to ""items"" (to-list items))
+        to
+    )
+)
+(parse-rss rss)
+");
+            Assert.That(result, Is.EqualTo(expected));
+            
+            var to = new ObjectDictionary();
+            var items = new List<ObjectDictionary>();
+            
+            var doc = XDocument.Parse(rss);
+            var channel = doc.Descendants("channel").First();
+            var el = channel.FirstElement();
+            while (el.Name != "item")
+            {
+                to[el.Name.LocalName] = el.Value;
+                el = el.NextElement();
+            }
+            
+            var elItems = channel.Descendants("item");
+            foreach (var elItem in elItems)
+            {
+                var item = new ObjectDictionary();
+                el = elItem.FirstElement();
+                while (el != null)
+                {
+                    item[el.Name.LocalName] = el.Value;
+                    el = el.NextElement();
+                }
+                items.Add(item);
+            }
+
+            to["items"] = items;
+            Assert.That(to, Is.EqualTo(expected));
+        }
+
     }
-    
 }
