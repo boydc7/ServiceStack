@@ -116,7 +116,7 @@ namespace ServiceStack.Host
 
                     if (EnableRequestBodyTracking)
                     {
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
                         // https://forums.servicestack.net/t/unexpected-end-of-stream-when-uploading-to-aspnet-core/6478/6
                         if (!request.ContentType.MatchesContentType(MimeTypes.MultiPartFormData))
                         {

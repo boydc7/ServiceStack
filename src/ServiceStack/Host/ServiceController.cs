@@ -159,7 +159,7 @@ namespace ServiceStack.Host
                           returnMarker.GetGenericArguments()[0]
                         : mi.ReturnType != typeof(object) && mi.ReturnType != typeof(void) ?
                           mi.ReturnType
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
                         : Type.GetType(requestType.FullName + ResponseDtoSuffix + "," + requestType.Assembly.GetName().Name);
 #else                                                  
                         : AssemblyUtils.FindType(requestType.FullName + ResponseDtoSuffix);

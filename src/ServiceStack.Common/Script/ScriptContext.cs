@@ -707,7 +707,7 @@ namespace ServiceStack.Script
                         if (pageResult.LastFilterError != null)
                             throw new ScriptException(pageResult);
 
-                        stream.WriteAsync(MemoryProvider.Instance.ToUtf8Bytes(pageResult.ResultOutput.AsSpan())).Wait();
+                        stream.WriteAsync(MemoryProvider.Instance.ToUtf8Bytes(pageResult.ResultOutput.AsSpan())).GetAwaiter().GetResult();
                         return;
                     }
 

@@ -30,7 +30,7 @@ namespace ServiceStack
             try
             {
                 var isIntegratedPipeline = false;
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                 //MONO doesn't implement this property
                 var pi = typeof(HttpRuntime).GetProperty("UsingIntegratedPipeline");
                 if (pi != null)
@@ -118,7 +118,7 @@ namespace ServiceStack
             }
         }
 
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         // Entry point for ASP.NET
         public IHttpHandler GetHandler(HttpContext ctx, string requestType, string url, string pathTranslated)
         {

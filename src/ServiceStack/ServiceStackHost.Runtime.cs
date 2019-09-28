@@ -596,7 +596,7 @@ namespace ServiceStack
             return OnSessionFilter(session, withSessionId);
         }
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
         /// <summary>
         /// Modify Cookie options
         /// </summary>

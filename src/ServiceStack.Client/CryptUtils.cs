@@ -453,7 +453,7 @@ namespace ServiceStack
     {
         public static void FromXml(this RSA rsa, string xml)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             rsa.FromXmlString(xml);
 #else
             //Throws PlatformNotSupportedException
@@ -464,7 +464,7 @@ namespace ServiceStack
 
         public static string ToXml(this RSA rsa, bool includePrivateParameters)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             return rsa.ToXmlString(includePrivateParameters: includePrivateParameters);
 #else 
             //Throws PlatformNotSupportedException
@@ -472,7 +472,7 @@ namespace ServiceStack
 #endif
         }
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
         public static HashAlgorithmName ToHashAlgorithmName(string hashAlgorithm)
         {
             switch (hashAlgorithm.ToUpper())
@@ -495,7 +495,7 @@ namespace ServiceStack
 
         public static byte[] Encrypt(this RSA rsa, byte[] bytes)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             return ((RSACryptoServiceProvider)rsa).Encrypt(bytes, RsaUtils.DoOAEPPadding);
 #else
             return rsa.Encrypt(bytes, RSAEncryptionPadding.OaepSHA1);
@@ -504,7 +504,7 @@ namespace ServiceStack
 
         public static byte[] Decrypt(this RSA rsa, byte[] bytes)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             return ((RSACryptoServiceProvider)rsa).Decrypt(bytes, RsaUtils.DoOAEPPadding);
 #else
             return rsa.Decrypt(bytes, RSAEncryptionPadding.OaepSHA1);
@@ -513,7 +513,7 @@ namespace ServiceStack
 
         public static byte[] SignData(this RSA rsa, byte[] bytes, string hashAlgorithm)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             return ((RSACryptoServiceProvider)rsa).SignData(bytes, hashAlgorithm);
 #else
             return rsa.SignData(bytes, ToHashAlgorithmName(hashAlgorithm), RSASignaturePadding.Pkcs1);
@@ -522,7 +522,7 @@ namespace ServiceStack
 
         public static bool VerifyData(this RSA rsa, byte[] bytes, byte[] signature, string hashAlgorithm)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             return ((RSACryptoServiceProvider)rsa).VerifyData(bytes, hashAlgorithm, signature);
 #else
             return rsa.VerifyData(bytes, signature, ToHashAlgorithmName(hashAlgorithm), RSASignaturePadding.Pkcs1);

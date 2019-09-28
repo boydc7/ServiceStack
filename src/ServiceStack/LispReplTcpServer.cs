@@ -197,7 +197,7 @@ namespace ServiceStack
                 //give it a small chance to die gracefully
                 if (!bgThread.Join(500))
                 {
-#if !NETSTANDARD2_0                    
+#if !NETSTANDARD2_1
                     //Ideally we shouldn't get here, but lets try our hardest to clean it up
                     Log.Warn("Interrupting previous Background Thread: " + bgThread.Name);
                     bgThread.Interrupt();

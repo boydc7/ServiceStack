@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Threading;
 using ServiceStack.Logging;
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
 using System.Threading.Tasks;
 #endif
 

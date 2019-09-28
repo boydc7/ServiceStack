@@ -1,7 +1,7 @@
 ﻿//Copyright (c) ServiceStack, Inc. All Rights Reserved.
 //License: https://raw.github.com/ServiceStack/ServiceStack/master/license.txt
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
 using System;
 using System.Collections.Specialized;
 using System.IO;
@@ -75,7 +75,7 @@ namespace ServiceStack
             }
             else
             {
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
                 if (lastModified == DateTime.MinValue)
                     webReq.Headers.Remove(HttpHeaders.IfModifiedSince);
                 else

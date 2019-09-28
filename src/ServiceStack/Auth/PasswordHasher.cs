@@ -9,7 +9,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ServiceStack.Logging;
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 #endif
 
@@ -26,7 +26,7 @@ namespace ServiceStack.Auth
         /// The PBKDF2 strategy PasswordHasher implementation that's used for hashing PBKDF2 passwords.
         /// </summary>
         public static Pbkdf2DeriveKeyDelegate DeriveKey { get; set; }
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
             = KeyDerivation.Pbkdf2; // .NET Core uses the most optimal implementation available for Windows
 #else
             = new ManagedPbkdf2Provider().DeriveKey; // Slowest managed implementation used by .NET Framework and all non-Windows OS's

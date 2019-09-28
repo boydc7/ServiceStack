@@ -211,7 +211,7 @@ namespace ServiceStack
             return value;
         }
 
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         public static RequestBaseWrapper ToHttpRequestBase(this IRequest httpReq)
         {
             return new RequestBaseWrapper((IHttpRequest)httpReq);
@@ -265,7 +265,7 @@ namespace ServiceStack
         {
             if (disposable == null)
                 return;
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
             var netcoreReq = (Microsoft.AspNetCore.Http.HttpRequest) request.OriginalRequest;
             netcoreReq.HttpContext.Response.RegisterForDispose(disposable);
 #else

@@ -65,7 +65,7 @@ namespace ServiceStack.Auth
                     requestFilter: req =>
                     {
                         req.SetUserAgent("ServiceStack");
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                         req.AllowAutoRedirect = false; //Missing in .NET Core
 #endif
                     },

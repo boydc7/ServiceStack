@@ -4,7 +4,7 @@
 
 using System;
 using System.Collections.Generic;
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
 using System.Threading.Tasks;
 #endif
 
@@ -61,7 +61,7 @@ namespace ServiceStack
             var asyncResults = new List<IAsyncResult>(times);
             for (var i = 0; i < times; i++)
             {
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
                 asyncResults.Add(Task.Run(() => actionFn(i)));
 #else                
                 asyncResults.Add(actionFn.BeginInvoke(i, null, null));
@@ -75,7 +75,7 @@ namespace ServiceStack
             var asyncResults = new List<IAsyncResult>(times);
             for (var i = 0; i < times; i++)
             {
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
                 asyncResults.Add(Task.Run(actionFn));
 #else                
                 asyncResults.Add(actionFn.BeginInvoke(null, null));

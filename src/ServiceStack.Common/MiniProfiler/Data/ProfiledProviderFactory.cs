@@ -39,7 +39,7 @@ namespace ServiceStack.MiniProfiler.Data
             WrappedFactory = wrappedFactory;
         }
 
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         /// <summary>
         /// proxy
         /// </summary>
@@ -76,7 +76,7 @@ namespace ServiceStack.MiniProfiler.Data
         public override DbConnectionStringBuilder CreateConnectionStringBuilder() => 
             WrappedFactory.CreateConnectionStringBuilder();
 
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         /// <summary>
         /// proxy
         /// </summary>

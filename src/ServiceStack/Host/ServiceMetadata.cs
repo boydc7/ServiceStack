@@ -590,7 +590,7 @@ namespace ServiceStack.Host
             return type;
         }
         
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         public List<Type> GetAllSoapOperationTypes()
         {
             var operationTypes = GetAllOperationTypes();

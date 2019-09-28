@@ -52,7 +52,7 @@ namespace ServiceStack
         public string[] envLogicalDrives() => Environment.GetLogicalDrives();
         public char envPathSeparator() => Path.PathSeparator;
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
         public string envFrameworkDescription() => System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
         public string envOSDescription() => System.Runtime.InteropServices.RuntimeInformation.OSDescription;
         public System.Runtime.InteropServices.Architecture envOSArchitecture() => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture;

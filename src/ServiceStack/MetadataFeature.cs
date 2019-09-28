@@ -64,7 +64,7 @@ namespace ServiceStack
             }
 
             var pathAction = pathParts[1].ToLowerInvariant();
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             if (pathAction == "wsdl")
             {
                 if (pathController == "soap11")
@@ -86,7 +86,7 @@ namespace ServiceStack
 
                 case "jsv":
                     return new JsvMetadataHandler();
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                 case "soap11":
                     return new Soap11MetadataHandler();
 

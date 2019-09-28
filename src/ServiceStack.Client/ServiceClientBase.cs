@@ -1875,7 +1875,7 @@ namespace ServiceStack
     {
         public static Stream ResponseStream(this WebResponse webRes)
         {
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
             return webRes.GetResponseStream().Decompress(webRes.Headers[HttpHeaders.ContentEncoding]);
 #else
             return webRes.GetResponseStream();

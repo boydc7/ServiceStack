@@ -530,7 +530,7 @@ namespace ServiceStack
             // (for example, so people can fix errors in their pages).
             if (HostContext.DebugMode)
             {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                 if (ex is HttpCompileException compileEx && compileEx.Results.Errors.HasErrors)
                 {
                     errors = new List<ResponseError>();
@@ -565,7 +565,7 @@ namespace ServiceStack
             return false;
         }
 
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         public static void ApplyGlobalResponseHeaders(this HttpListenerResponse httpRes)
         {
             if (HostContext.Config == null) return;

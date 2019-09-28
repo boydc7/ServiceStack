@@ -58,7 +58,7 @@ namespace ServiceStack
             return httpRes.EndHttpHandlerRequestAsync(skipHeaders: skipHeaders);
         }
         
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         /// <summary>
         /// End a ServiceStack Request
         /// </summary>

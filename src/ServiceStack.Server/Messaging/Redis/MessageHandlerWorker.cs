@@ -126,7 +126,7 @@ namespace ServiceStack.Messaging.Redis
             }
             catch (Exception ex)
             {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                 //Ignore handling rare, but expected exceptions from KillBgThreadIfExists()
                 if (ex is ThreadInterruptedException || ex is ThreadAbortException)
                 {

@@ -27,7 +27,7 @@ namespace ServiceStack.Host.Handlers
 
         protected virtual Task CreateProcessRequestTask(IRequest httpReq, IResponse httpRes, string operationName)
         {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
             var currentCulture = Thread.CurrentThread.CurrentCulture;
             var currentUiCulture = Thread.CurrentThread.CurrentUICulture;
             var ctx = HttpContext.Current;
@@ -36,7 +36,7 @@ namespace ServiceStack.Host.Handlers
             //preserve Current Culture:
             return new Task(() =>
             {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                 Thread.CurrentThread.CurrentCulture = currentCulture;
                 Thread.CurrentThread.CurrentUICulture = currentUiCulture;
                 //HttpContext is not preserved in ThreadPool threads: http://stackoverflow.com/a/13558065/85785
@@ -77,7 +77,7 @@ namespace ServiceStack.Host.Handlers
             return task;
         }
 
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
         protected static bool DefaultHandledRequest(HttpListenerContext context) => false;
 
         protected static bool DefaultHandledRequest(HttpContextBase context) => false;
