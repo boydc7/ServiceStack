@@ -1,5 +1,7 @@
-﻿#if NETSTANDARD2_1
+﻿
 
+using Microsoft.AspNetCore.WebUtilities;
+#if NETSTANDARD2_1
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,6 +23,8 @@ namespace ServiceStack.Host.NetCore
 {
     public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IServiceProvider
     {
+        private static readonly string tempDirectory = Environment.GetEnvironmentVariable("ASPNETCORE_TEMP") ?? Path.GetTempPath();
+
         public static ILog log = LogManager.GetLogger(typeof(NetCoreRequest));
 
         private IResolver resolver;
@@ -204,11 +208,25 @@ namespace ServiceStack.Host.NetCore
         {
             if (BufferedStream != null)
             {
-                request.EnableRewind();
+                EnableRewind();
                 return BufferedStream.ReadBufferedStreamToEnd(this);
             }
 
             return request.Body.ReadToEnd();
+        }
+
+        private void EnableRewind(
+            int bufferThreshold = 30720,
+            long? bufferLimit = null)
+        {
+            var body = request.Body;
+
+            if (!body.CanSeek)
+            {
+                var bufferingReadStream = new FileBufferingReadStream(body, bufferThreshold, bufferLimit, tempDirectory);
+                request.Body = bufferingReadStream;
+                request.HttpContext.Response.RegisterForDispose(bufferingReadStream);
+            }
         }
 
         public long ContentLength => request.ContentLength.GetValueOrDefault();

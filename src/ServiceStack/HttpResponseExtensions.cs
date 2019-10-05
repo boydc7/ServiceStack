@@ -286,14 +286,14 @@ namespace ServiceStack
             response.AllowSyncIO().OutputStream.Write(bytes, 0, bytes.Length);
         }
 
-        public static async Task WriteAsync(this IResponse response, string contents)
+        public static Task WriteAsync(this IResponse response, string contents)
         {
             if (contents == null)
             {
                 response.SetContentLength(0);
                 response.EndRequest();
 
-                return;
+                return Task.CompletedTask;
             }
 
             //retain behavior with ASP.NET's response.Write(string)
@@ -303,7 +303,7 @@ namespace ServiceStack
             var bytes = contents.ToUtf8Bytes();
             response.SetContentLength(bytes.Length);
 
-            await response.OutputStream.WriteAsync(bytes);
+            return response.OutputStream.WriteAsync(bytes).AsTask();
         }
     }
 
