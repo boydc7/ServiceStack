@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ServiceStack.Extensions;
 using ServiceStack.Text;
 
 namespace ServiceStack.Script 
@@ -507,12 +508,9 @@ namespace ServiceStack.Script
                                 literal = literal.AdvancePastPipeOperator();
                             }
                         }
-                        else
+                        else if (!literal.AdvancePastWhitespace().IsNullOrEmpty())
                         {
-                            // No valid syntax reaches here
-                            System.Diagnostics.Debug.Fail("Syntax Error? Expected pipeline operator '|>'");
-                            if (!literal.IsNullOrEmpty())
-                                literal = literal.Advance(1);
+                            throw new SyntaxErrorException($"Unexpected syntax '{literal.ToString()}', Expected pipeline operator '|>'");
                         }
                     }
                     else

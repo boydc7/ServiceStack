@@ -114,7 +114,7 @@ namespace ServiceStack.Host
                     if (!isClosed)
                         entry.FormData = request.FormData.ToDictionary();
 
-                    if (EnableRequestBodyTracking)
+                    if (EnableRequestBodyTracking && request.CanReadRequestBody())
                     {
 #if NETSTANDARD2_1
                         // https://forums.servicestack.net/t/unexpected-end-of-stream-when-uploading-to-aspnet-core/6478/6

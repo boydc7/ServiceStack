@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 
 namespace ServiceStack
 {
-    public interface IServiceClient : IServiceClientAsync, IReplyClient, IOneWayClient, IRestClient, IHasSessionId, IHasBearerToken, IHasVersion
+    public interface IServiceClient : IServiceClientAsync, IHttpRestClientAsync, IReplyClient, IOneWayClient, IRestClient, IHasSessionId, IHasBearerToken, IHasVersion
     {
     }
 

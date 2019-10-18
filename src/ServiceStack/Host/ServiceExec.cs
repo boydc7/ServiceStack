@@ -32,31 +32,20 @@ namespace ServiceStack.Host
             {
                 try
                 {
-                    if (mi.IsGenericMethod || mi.GetParameters().Length != 1)
+					if (!ServiceController.IsServiceAction(mi))
                         continue;
                 }
                 catch(TargetInvocationException)
                 {
-                    continue;
+					continue;
                 }
                 catch(BadImageFormatException)
                 {
                     continue;
                 }
-
-                var paramType = mi.GetParameters()[0].ParameterType;
-                if (paramType.IsValueType || paramType == typeof(string))
-                    continue;
-
-                var actionName = mi.Name.ToUpper();
-                if (!HttpMethods.AllVerbs.Contains(actionName) && 
-                    actionName != ActionContext.AnyAction &&
-                    !HttpMethods.AllVerbs.Any(verb => ContentTypes.KnownFormats.Any(format => actionName.EqualsIgnoreCase(verb + format))) &&
-                    !ContentTypes.KnownFormats.Any(format => actionName.EqualsIgnoreCase(ActionContext.AnyAction + format)))
-                    continue;
-
-                yield return mi;
-            }
+                
+				yield return mi;
+			}
         }
     }
 

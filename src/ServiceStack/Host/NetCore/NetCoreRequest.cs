@@ -21,7 +21,7 @@ using ServiceStack.NetCore;
 
 namespace ServiceStack.Host.NetCore
 {
-    public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IServiceProvider
+    public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IServiceProvider, IHasBufferedStream
     {
         private static readonly string tempDirectory = Environment.GetEnvironmentVariable("ASPNETCORE_TEMP") ?? Path.GetTempPath();
 
