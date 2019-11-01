@@ -5,7 +5,7 @@ namespace ServiceStack.Auth
 {
     public interface IUserAuth : IUserAuthDetailsExtended, IMeta
     {
-        int Id { get; set; }
+        long Id { get; set; }
         string PrimaryEmail { get; set; }
         string Salt { get; set; }
         string PasswordHash { get; set; }
@@ -26,8 +26,8 @@ namespace ServiceStack.Auth
 
     public interface IUserAuthDetails : IAuthTokens, IMeta
     {
-        int Id { get; set; }
-        int UserAuthId { get; set; }
+        long Id { get; set; }
+        long UserAuthId { get; set; }
         DateTime CreatedDate { get; set; }
         DateTime ModifiedDate { get; set; }
         int? RefId { get; set; }

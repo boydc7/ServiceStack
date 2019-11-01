@@ -9,7 +9,7 @@ namespace ServiceStack.Auth
     public class UserAuth : IUserAuth
     {
         [AutoIncrement]
-        public virtual int Id { get; set; }
+        public virtual long Id { get; set; }
 
         [Index]
         public virtual string UserName { get; set; }
@@ -58,9 +58,9 @@ namespace ServiceStack.Auth
     public class UserAuthDetails : IUserAuthDetails
     {
         [AutoIncrement]
-        public virtual int Id { get; set; }
+        public virtual long Id { get; set; }
 
-        public virtual int UserAuthId { get; set; }
+        public virtual long UserAuthId { get; set; }
         public virtual string Provider { get; set; }
         public virtual string UserId { get; set; }
         public virtual string UserName { get; set; }
@@ -106,9 +106,9 @@ namespace ServiceStack.Auth
     public class UserAuthRole
     {
         [AutoIncrement]
-        public virtual int Id { get; set; }
+        public virtual long Id { get; set; }
 
-        public virtual int UserAuthId { get; set; }
+        public virtual long UserAuthId { get; set; }
 
         public virtual string Role { get; set; }
 
