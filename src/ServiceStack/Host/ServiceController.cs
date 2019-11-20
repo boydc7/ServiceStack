@@ -848,6 +848,8 @@ namespace ServiceStack.Host
                 return;
             if ((RequestAttributes.InProcess & actualAttributes) == RequestAttributes.InProcess) 
                 return;
+            if (actualAttributes.HasFlag(RequestAttributes.RydrInternalRequest))
+                return;
 
             var hasNoAccessRestrictions = !requestServiceAttrs.TryGetValue(requestType, out var restrictAttr)
                 || restrictAttr.HasNoAccessRestrictions;

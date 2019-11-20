@@ -11,13 +11,13 @@ namespace ServiceStack
         None = 0L,
 
         Any = AnyNetworkAccessType | AnySecurityMode | AnyHttpMethod | AnyCallStyle | AnyFormat | AnyEndpoint,
-        AnyNetworkAccessType = External | LocalSubnet | Localhost | InProcess | RydrInternalRequest,
+        AnyNetworkAccessType = External | LocalSubnet | Localhost | InProcess,
         AnySecurityMode = Secure | InSecure,
         AnyHttpMethod = HttpHead | HttpGet | HttpPost | HttpPut | HttpDelete | HttpPatch | HttpOptions | HttpOther,
         AnyCallStyle = OneWay | Reply,
         AnyFormat = Soap11 | Soap12 | Xml | Json | Jsv | Html | ProtoBuf | Csv | MsgPack | Wire | FormatOther,
         AnyEndpoint = Http | MessageQueue | Tcp | Grpc | EndpointOther,
-        InternalNetworkAccess = InProcess | Localhost | LocalSubnet | RydrInternalRequest,
+        InternalNetworkAccess = InProcess | Localhost | LocalSubnet,
 
         //Whether it came from an Internal or External address
         Localhost = 1L << 0,
@@ -68,7 +68,6 @@ namespace ServiceStack
         EndpointOther = 1L << 30,
 
         InProcess = 1L << 31, //Service was executed within code (e.g. ResolveService<T>)
-
 
         RydrInternalRequest = 1L << 32,
     }
