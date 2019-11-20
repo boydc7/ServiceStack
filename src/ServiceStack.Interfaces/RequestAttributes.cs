@@ -70,7 +70,7 @@ namespace ServiceStack
         InProcess = 1 << 31, //Service was executed within code (e.g. ResolveService<T>)
 
 
-        RydrInternalRequest = 1L << 63,
+        RydrInternalRequest = 1L << 40,
     }
 
     public enum Network : long
