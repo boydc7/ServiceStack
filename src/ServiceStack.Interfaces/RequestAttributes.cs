@@ -8,66 +8,66 @@ namespace ServiceStack
     [Flags]
     public enum RequestAttributes : long
     {
-        None = 0,
+        None = 0L,
 
         Any = AnyNetworkAccessType | AnySecurityMode | AnyHttpMethod | AnyCallStyle | AnyFormat | AnyEndpoint,
-        AnyNetworkAccessType = External | LocalSubnet | Localhost | InProcess,
+        AnyNetworkAccessType = External | LocalSubnet | Localhost | InProcess | RydrInternalRequest,
         AnySecurityMode = Secure | InSecure,
         AnyHttpMethod = HttpHead | HttpGet | HttpPost | HttpPut | HttpDelete | HttpPatch | HttpOptions | HttpOther,
         AnyCallStyle = OneWay | Reply,
         AnyFormat = Soap11 | Soap12 | Xml | Json | Jsv | Html | ProtoBuf | Csv | MsgPack | Wire | FormatOther,
         AnyEndpoint = Http | MessageQueue | Tcp | Grpc | EndpointOther,
-        InternalNetworkAccess = InProcess | Localhost | LocalSubnet,
+        InternalNetworkAccess = InProcess | Localhost | LocalSubnet | RydrInternalRequest,
 
         //Whether it came from an Internal or External address
-        Localhost = 1 << 0,
-        LocalSubnet = 1 << 1,
-        External = 1 << 2,
+        Localhost = 1L << 0,
+        LocalSubnet = 1L << 1,
+        External = 1L << 2,
 
         //Called over a secure or insecure channel
-        Secure = 1 << 3,
-        InSecure = 1 << 4,
+        Secure = 1L << 3,
+        InSecure = 1L << 4,
 
         //HTTP request type
-        HttpHead = 1 << 5,
-        HttpGet = 1 << 6,
-        HttpPost = 1 << 7,
-        HttpPut = 1 << 8,
-        HttpDelete = 1 << 9,
-        HttpPatch = 1 << 10,
-        HttpOptions = 1 << 11,
-        HttpOther = 1 << 12,
+        HttpHead = 1L << 5,
+        HttpGet = 1L << 6,
+        HttpPost = 1L << 7,
+        HttpPut = 1L << 8,
+        HttpDelete = 1L << 9,
+        HttpPatch = 1L << 10,
+        HttpOptions = 1L << 11,
+        HttpOther = 1L << 12,
 
         //Call Styles
-        OneWay = 1 << 13,
-        Reply = 1 << 14,
+        OneWay = 1L << 13,
+        Reply = 1L << 14,
 
         //Different formats
-        Soap11 = 1 << 15,
-        Soap12 = 1 << 16,
+        Soap11 = 1L << 15,
+        Soap12 = 1L << 16,
         //POX
-        Xml = 1 << 17,
+        Xml = 1L << 17,
         //Javascript
-        Json = 1 << 18,
+        Json = 1L << 18,
         //Jsv i.e. TypeSerializer
-        Jsv = 1 << 19,
+        Jsv = 1L << 19,
         //e.g. protobuf-net
-        ProtoBuf = 1 << 20,
+        ProtoBuf = 1L << 20,
         //e.g. text/csv
-        Csv = 1 << 21,
-        Html = 1 << 22,
-        Wire = 1 << 23,
-        MsgPack = 1 << 24,
-        FormatOther = 1 << 25,
+        Csv = 1L << 21,
+        Html = 1L << 22,
+        Wire = 1L << 23,
+        MsgPack = 1L << 24,
+        FormatOther = 1L << 25,
 
         //Different endpoints
-        Http = 1 << 26,
-        MessageQueue = 1 << 27,
-        Tcp = 1 << 28,
-        Grpc = 1 << 29,
-        EndpointOther = 1 << 30,
+        Http = 1L << 26,
+        MessageQueue = 1L << 27,
+        Tcp = 1L << 28,
+        Grpc = 1L << 29,
+        EndpointOther = 1L << 30,
 
-        InProcess = 1 << 31, //Service was executed within code (e.g. ResolveService<T>)
+        InProcess = 1L << 31, //Service was executed within code (e.g. ResolveService<T>)
 
 
         RydrInternalRequest = 1L << 32,
