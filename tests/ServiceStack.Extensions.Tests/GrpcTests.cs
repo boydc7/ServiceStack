@@ -23,6 +23,7 @@ using ProtoBuf.Grpc.Server;
 using ServiceStack.Auth;
 using ServiceStack.FluentValidation;
 using ServiceStack.FluentValidation.Validators;
+using ServiceStack.Model;
 using ServiceStack.Text;
 using ServiceStack.Validation;
 
@@ -279,6 +280,28 @@ namespace ServiceStack.Extensions.Tests
         [DataMember(Order = 8)]
         public bool Private { get; set; }
     }
+    
+    public class CustomException : Exception, IResponseStatusConvertible, IHasStatusCode
+    {
+        public ResponseStatus ToResponseStatus() => new ResponseStatus
+        {
+            ErrorCode = "CustomErrorCode",
+            Message = "Custom Error Message",
+        };
+
+        public int StatusCode { get; } = 401;
+    }
+    
+    [DataContract]
+    public class ThrowCustom : IReturn<ThrowCustomResponse> {}
+
+    [DataContract]
+    public class ThrowCustomResponse
+    {
+        [DataMember(Order = 1)]
+        public ResponseStatus ResponseStatus { get; set; }
+    }
+    
 
     public class MyServices : Service
     {
@@ -300,6 +323,8 @@ namespace ServiceStack.Extensions.Tests
         public object Get(Throw request) => throw new Exception(request.Message ?? "Error in Throw");
         
         public void Get(ThrowVoid request) => throw new Exception(request.Message ?? "Error in ThrowVoid");
+
+        public object Get(ThrowCustom request) => request; //thrown in Global Request Filters
 
         public object Post(TriggerValidators request) => new EmptyResponse();
 
@@ -348,13 +373,20 @@ namespace ServiceStack.Extensions.Tests
 
             public override void Configure(Container container)
             {
+                RegisterService<GetFileService>();
+                
                 Plugins.Add(new ValidationFeature());
                 Plugins.Add(new GrpcFeature(App));
+                
+                GlobalRequestFilters.Add((req, res, dto) => {
+                    if (dto is ThrowCustom)
+                        throw new CustomException();
+                });
             }
 
             public override void ConfigureKestrel(KestrelServerOptions options)
             {
-                options.ListenLocalhost(20000, listenOptions =>
+                options.ListenLocalhost(TestsConfig.Port, listenOptions =>
                 {
                     listenOptions.Protocols = HttpProtocols.Http2;
                 });
@@ -382,19 +414,19 @@ namespace ServiceStack.Extensions.Tests
             GrpcClientFactory.AllowUnencryptedHttp2 = true;
             appHost = new AppHost()
                 .Init()
-                .Start("http://localhost:20000/");
+                .Start(TestsConfig.ListeningOn);
         }
 
         [OneTimeTearDown]
         public void OneTimeTearDown() => appHost.Dispose();
 
-        private static GrpcServiceClient GetClient() => new GrpcServiceClient("http://localhost:20000");
+        private static GrpcServiceClient GetClient() => new GrpcServiceClient(TestsConfig.BaseUri);
 
         [Test]
         public async Task Can_call_MultiplyRequest_Grpc_Service_ICalculator()
         {
             GrpcClientFactory.AllowUnencryptedHttp2 = true;
-            using var http = GrpcChannel.ForAddress("http://localhost:20000");
+            using var http = GrpcChannel.ForAddress(TestsConfig.BaseUri);
             var calculator = http.CreateGrpcService<ICalculator>();
             var result = await calculator.MultiplyAsync(new MultiplyRequest { X = 12, Y = 4 });
             Assert.That(result.Result, Is.EqualTo(48));
@@ -404,10 +436,10 @@ namespace ServiceStack.Extensions.Tests
         public async Task Can_call_Multiply_Grpc_Service_GrpcChannel()
         {
             GrpcClientFactory.AllowUnencryptedHttp2 = true;
-            using var http = GrpcChannel.ForAddress("http://localhost:20000");
+            using var http = GrpcChannel.ForAddress(TestsConfig.BaseUri);
 
             var response = await http.CreateCallInvoker().Execute<Multiply, MultiplyResponse>(new Multiply { X = 12, Y = 4 }, "GrpcServices",
-                HttpMethods.Post.ToPascalCase() + nameof(Multiply));
+                GrpcConfig.GetServiceName(HttpMethods.Post, nameof(Multiply)));
 
             Assert.That(response.Result, Is.EqualTo(48));
         }
@@ -418,6 +450,15 @@ namespace ServiceStack.Extensions.Tests
             using var client = GetClient();
 
             var response = await client.PostAsync(new Multiply { X = 12, Y = 4 });
+            Assert.That(response.Result, Is.EqualTo(48));
+        }
+
+        [Test]
+        public void Can_call_Multiply_Grpc_Service_GrpcServiceClient_sync()
+        {
+            using var client = GetClient();
+
+            var response = client.Post(new Multiply { X = 12, Y = 4 });
             Assert.That(response.Result, Is.EqualTo(48));
         }
 
@@ -448,6 +489,18 @@ namespace ServiceStack.Extensions.Tests
         }
 
         [Test]
+        public void Can_call_GetHello_with_Get_or_Send_sync()
+        {
+            using var client = GetClient();
+
+            var response = client.Get(new GetHello { Name = "GET" });
+            Assert.That(response.Result, Is.EqualTo($"Hello, GET!"));
+
+            response = client.Send(new GetHello { Name = "SEND" });
+            Assert.That(response.Result, Is.EqualTo($"Hello, SEND!"));
+        }
+
+        [Test]
         public async Task Can_call_AnyHello_with_Get_Post_or_Send()
         {
             using var client = GetClient();
@@ -463,6 +516,21 @@ namespace ServiceStack.Extensions.Tests
         }
 
         [Test]
+        public void Can_call_AnyHello_with_Get_Post_or_Send_sync()
+        {
+            using var client = GetClient();
+
+            var response = client.Get(new AnyHello { Name = "GET" });
+            Assert.That(response.Result, Is.EqualTo($"Hello, GET!"));
+
+            response = client.Post(new AnyHello { Name = "POST" });
+            Assert.That(response.Result, Is.EqualTo($"Hello, POST!"));
+
+            response = client.Send(new GetHello { Name = "SEND" });
+            Assert.That(response.Result, Is.EqualTo($"Hello, SEND!"));
+        }
+
+        [Test]
         public async Task Can_call_AnyHello_Batch()
         {
             using var client = GetClient();
@@ -473,6 +541,24 @@ namespace ServiceStack.Extensions.Tests
                 new AnyHello {Name = "C"},
             };
             var responses = await client.SendAllAsync(requests);
+            Assert.That( responses.Map(x => x.Result), Is.EqualTo(new[] {
+                $"Hello, A!",
+                $"Hello, B!",
+                $"Hello, C!",
+            }));
+        }
+
+        [Test]
+        public void Can_call_AnyHello_Batch_sync()
+        {
+            using var client = GetClient();
+
+            var requests = new[] {
+                new AnyHello {Name = "A"},
+                new AnyHello {Name = "B"},
+                new AnyHello {Name = "C"},
+            };
+            var responses = client.SendAll(requests);
             Assert.That( responses.Map(x => x.Result), Is.EqualTo(new[] {
                 $"Hello, A!",
                 $"Hello, B!",
@@ -498,6 +584,23 @@ namespace ServiceStack.Extensions.Tests
         }
 
         [Test]
+        public void Can_call_Incr_Batch_ReturnVoid_sync()
+        {
+            using var client = GetClient();
+
+            Incr.Counter = 0;
+            
+            var requests = new[] {
+                new Incr {Amount = 1},
+                new Incr {Amount = 2},
+                new Incr {Amount = 3},
+            };
+            client.PublishAll(requests);
+            
+            Assert.That(Incr.Counter, Is.EqualTo(1 + 2 + 3));
+        }
+
+        [Test]
         public async Task Does_throw_WebServiceException()
         {
             using var client = GetClient();
@@ -515,6 +618,23 @@ namespace ServiceStack.Extensions.Tests
         }
 
         [Test]
+        public void Does_throw_WebServiceException_sync()
+        {
+            using var client = GetClient();
+
+            try
+            {
+                client.Get(new Throw { Message = "throw test" });
+                Assert.Fail("should throw");
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(500));
+                Assert.That(e.Message, Is.EqualTo("throw test"));
+            }
+        }
+
+        [Test]
         public async Task Does_throw_WebServiceException_ReturnVoid()
         {
             using var client = GetClient();
@@ -522,6 +642,23 @@ namespace ServiceStack.Extensions.Tests
             try
             {
                 await client.GetAsync(new ThrowVoid { Message = "throw test" });
+                Assert.Fail("should throw");
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(500));
+                Assert.That(e.Message, Is.EqualTo("throw test"));
+            }
+        }
+
+        [Test]
+        public void Does_throw_WebServiceException_ReturnVoid_sync()
+        {
+            using var client = GetClient();
+
+            try
+            {
+                client.Get(new ThrowVoid { Message = "throw test" });
                 Assert.Fail("should throw");
             }
             catch (WebServiceException e)
@@ -582,6 +719,23 @@ namespace ServiceStack.Extensions.Tests
                 Assert.That(errors.First(x => x.FieldName == "Null").ErrorCode, Is.EqualTo("Null"));
                 Assert.That(errors.First(x => x.FieldName == "RegularExpression").ErrorCode, Is.EqualTo("RegularExpression"));
                 Assert.That(errors.First(x => x.FieldName == "ScalePrecision").ErrorCode, Is.EqualTo("ScalePrecision"));
+            }
+        }
+        
+        [Test]
+        public async Task Does_throw_WebServiceException_on_CustomException()
+        {
+            using var client = GetClient();
+
+            try
+            {
+                await client.GetAsync(new ThrowCustom());
+                Assert.Fail("should throw");
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(401));
+                Assert.That(e.Message, Is.EqualTo("Custom Error Message"));
             }
         }
 
@@ -664,6 +818,111 @@ namespace ServiceStack.Extensions.Tests
             Assert.That(files[2].ResponseStatus.ErrorCode, Is.EqualTo(nameof(HttpStatusCode.NotFound)));
             files = files.Where(x => x.ResponseStatus == null).ToList();
             AssertFiles(files);
+        }
+
+        static string GetServiceProto<T>()
+            => GrpcConfig.TypeModel.GetSchema(GrpcMarshaller<T>.GetMetaType().Type, ProtoBuf.Meta.ProtoSyntax.Proto3);
+
+        [Test]
+        public void CheckServiceProto_BaseType()
+        {
+            var schema = GetServiceProto<Foo>();
+            Assert.AreEqual(@"syntax = ""proto3"";
+package ServiceStack.Extensions.Tests;
+
+message Foo {
+   string X = 1;
+}
+", schema);
+         }
+ 
+         [Test]
+         public void CheckServiceProto_DerivedType()
+         {
+             var schema = GetServiceProto<Bar>();
+             Assert.AreEqual(@"syntax = ""proto3"";
+package ServiceStack.Extensions.Tests;
+
+message Bar {
+   string Y = 2;
+}
+message Foo {
+   string X = 1;
+   oneof subtype {
+      Bar Bar = 210304982;
+   }
+}
+", schema);
+         }
+ 
+        [Test]
+        public void CheckServiceProto_QueryDb_ShouldBeOffset()
+        {
+            var schema = GetServiceProto<QueryFoos>();
+            Assert.AreEqual(@"syntax = ""proto3"";
+package ServiceStack.Extensions.Tests;
+
+message QueryFoos {
+   int32 Skip = 1;
+   int32 Take = 2;
+   string OrderBy = 3;
+   string OrderByDesc = 4;
+   string Include = 5;
+   string Fields = 6;
+   map<string,string> Meta = 7;
+   string X = 201;
+}
+", schema);
+        }
+
+        [Test]
+        public void CheckServiceProto_CustomRequestDto_ShouldBeOffset()
+        {
+            var schema = GetServiceProto<CustomRequestDto>();
+            Assert.AreEqual(@"syntax = ""proto3"";
+package ServiceStack.Extensions.Tests;
+
+message CustomRequestDto {
+   int32 PageName = 42;
+   string Name = 105;
+}
+", schema);
+        }
+
+        [DataContract]
+        public class Foo
+        {
+            [DataMember(Order = 1)]
+            public string X { get; set; }
+        }
+
+        [DataContract]
+        public class Bar : Foo
+        {
+            [DataMember(Order = 2)]
+            public string Y { get; set; }
+        }
+
+        [Route("/query/foos")]
+        [DataContract]
+        public class QueryFoos : QueryDb<Foo>
+        {
+            [DataMember(Order = 1)]
+            public string X { get; set; }
+        }
+
+        [DataContract]
+        public abstract class CustomRequestDtoBase : IReturnVoid
+        {
+            [DataMember(Order = 42, Name = "PageName")]
+            public int Page { get; set; }
+        }
+
+        [DataContract]
+        public class CustomRequestDto : CustomRequestDtoBase
+        {
+            [DataMember(Order = 5)]
+            public string Name { get; set; }
         }
     }
 }

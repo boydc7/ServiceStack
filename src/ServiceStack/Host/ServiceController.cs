@@ -18,9 +18,9 @@ using ServiceStack.Web;
 namespace ServiceStack.Host
 {
     public delegate object ServiceExecFn(IRequest requestContext, object request);
-    public delegate object InstanceExecFn(IRequest requestContext, object intance, object request);
-    public delegate object ActionInvokerFn(object intance, object request);
-    public delegate void VoidActionInvokerFn(object intance, object request);
+    public delegate object InstanceExecFn(IRequest requestContext, object instance, object request);
+    public delegate object ActionInvokerFn(object instance, object request);
+    public delegate void VoidActionInvokerFn(object instance, object request);
 
     public class ServiceController : IServiceController
     {
@@ -164,7 +164,9 @@ namespace ServiceStack.Host
 #else                                                  
                         : AssemblyUtils.FindType(requestType.FullName + ResponseDtoSuffix);
 #endif
-                    if (responseType?.Name == "Task`1" && responseType.GetGenericArguments()[0] != typeof(object))
+                    if (responseType == typeof(Task))
+                        responseType = null;
+                    else if (responseType?.Name == "Task`1" && responseType.GetGenericArguments()[0] != typeof(object))
                         responseType = responseType.GetGenericArguments()[0];
                     
                     RegisterRestPaths(requestType);
@@ -469,31 +471,39 @@ namespace ServiceStack.Host
                 InjectRequestContext(service, request);
 
                 object response = null;
+
+                object Release(object result)
+                {
+                    //Gets disposed by AppHost or ContainerAdapter if set
+                    if (result is Task taskResponse)
+                    {
+                        return HostContext.Async.ContinueWith(request, taskResponse, task => {
+                            appHost.Release(service);
+                            return taskResponse.GetResult();
+                        });
+                    }
+                    appHost.Release(service);
+                    return result;
+                }
+                
                 try
                 {
                     requestDto = appHost.OnPreExecuteServiceFilter(service, requestDto, request, request.Response);
 
                     if (request.Dto == null) // Don't override existing batched DTO[]
-                        request.Dto = requestDto; 
+                        request.Dto = requestDto;
 
                     //Executes the service and returns the result
                     response = serviceExec(request, requestDto);
 
                     response = appHost.OnPostExecuteServiceFilter(service, response, request, request.Response);
 
-                    return response;
+                    return Release(response);
                 }
-                finally
+                catch (Exception)
                 {
-                    //Gets disposed by AppHost or ContainerAdapter if set
-                    if (response is Task taskResponse)
-                    {
-                        HostContext.Async.ContinueWith(request, taskResponse, task => appHost.Release(service));
-                    }
-                    else
-                    {
-                        appHost.Release(service);
-                    }
+                    Release(response);
+                    throw;
                 }
             }
             catch (TargetInvocationException tex)
@@ -731,13 +741,11 @@ namespace ServiceStack.Host
                     }
                     return ret;
                 }
-
-                return applyFilters ? await ApplyResponseFiltersAsync(response, req) : response;
             }
 
-            return applyFilters
-                ? await ApplyResponseFiltersAsync(response, req)
-                : response;
+            if (applyFilters)
+                return await ApplyResponseFiltersAsync(response, req); 
+            return response;
         }
 
         public virtual ServiceExecFn GetService(Type requestType)

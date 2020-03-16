@@ -41,8 +41,12 @@ namespace ServiceStack
         public FileSystemVirtualFiles hostVfsFileSystem() => HostContext.FileSystemVirtualFiles;
         public GistVirtualFiles hostVfsGist() => HostContext.GistVirtualFiles;
 
-        public IHttpRequest getHttpRequest(ScriptScopeContext scope) => req(scope);
-        internal IHttpRequest req(ScriptScopeContext scope) => scope.GetValue("Request") as IHttpRequest;
+        public IHttpRequest httpRequest(ScriptScopeContext scope) => req(scope);
+        internal IHttpRequest req(ScriptScopeContext scope) => scope.GetValue(ScriptConstants.Request) as IHttpRequest;
+
+        public object requestItem(ScriptScopeContext scope, string key) => req(scope).GetItem(key);
+
+        public object baseUrl(ScriptScopeContext scope) => req(scope).GetBaseUrl();
 
         public object resolveUrl(ScriptScopeContext scope, string virtualPath) =>
             req(scope).ResolveAbsoluteUrl(virtualPath);
@@ -230,8 +234,13 @@ namespace ServiceStack
                     throw new ArgumentException("Request DTO is not an AutoQuery Data DTO: " + requestName);
                                 
                 var reqParams = objDictionary?.ToStringDictionary() ?? TypeConstants.EmptyStringDictionary;
-                var q = autoQuery.CreateQuery(aqDto, reqParams, req(scope));
-                var response = autoQuery.Execute(aqDto, q);
+                
+                var httpReq = req(scope);
+                var ctx = autoQuery.CreateContext(aqDto, reqParams, httpReq);
+                var fromType = autoQuery.GetFromType(aqDto.GetType());
+                using var db = autoQuery.GetDb(ctx, fromType);
+                var q = autoQuery.CreateQuery(aqDto, reqParams, httpReq, db);
+                var response = autoQuery.Execute(aqDto, q, db);
 
                 return response;
             }
@@ -252,6 +261,8 @@ namespace ServiceStack
        
         public object getUserSession(ScriptScopeContext scope) => req(scope).GetSession();
         public IAuthSession userSession(ScriptScopeContext scope) => req(scope).GetSession();
+        public string userAuthId(ScriptScopeContext scope) => req(scope).GetSession()?.UserAuthId;
+        public string userAuthName(ScriptScopeContext scope) => req(scope).GetSession()?.UserAuthName;
         
         public string userProfileUrl(ScriptScopeContext scope) => req(scope).GetSession().GetProfileUrl();
 
@@ -554,6 +565,7 @@ namespace ServiceStack
                     Sources = ViewUtils.ToStringList((IEnumerable) virtualPaths),
                     OutputTo = args.TryGetValue("out", out var oOut) ? oOut as string : null,
                     OutputWebPath = args.TryGetValue("outWebPath", out var oOutWebPath) ? oOutWebPath as string : null,
+                    PathBase = args.TryGetValue("pathBase", out var oPathBase) ? oPathBase as string : HostContext.Config.PathBase,
                     Minify = !args.TryGetValue("minify", out var oMinify) || oMinify is bool bMinify && bMinify,
                     SaveToDisk = args.TryGetValue("disk", out var oDisk) && oDisk is bool bDisk && bDisk,
                     Cache = !args.TryGetValue("cache", out var oCache) || oCache is bool bCache && bCache,
@@ -575,6 +587,7 @@ namespace ServiceStack
                     Sources = ViewUtils.ToStringList((IEnumerable) virtualPaths),
                     OutputTo = args.TryGetValue("out", out var oOut) ? oOut as string : null,
                     OutputWebPath = args.TryGetValue("outWebPath", out var oOutWebPath) ? oOutWebPath as string : null,
+                    PathBase = args.TryGetValue("pathBase", out var oPathBase) ? oPathBase as string : HostContext.Config.PathBase,
                     Minify = !args.TryGetValue("minify", out var oMinify) || oMinify is bool bMinify && bMinify,
                     SaveToDisk = args.TryGetValue("disk", out var oDisk) && oDisk is bool bDisk && bDisk,
                     Cache = !args.TryGetValue("cache", out var oCache) || oCache is bool bCache && bCache,
@@ -594,6 +607,7 @@ namespace ServiceStack
                     Sources = ViewUtils.ToStringList((IEnumerable) virtualPaths),
                     OutputTo = args.TryGetValue("out", out var oOut) ? oOut as string : null,
                     OutputWebPath = args.TryGetValue("outWebPath", out var oOutWebPath) ? oOutWebPath as string : null,
+                    PathBase = args.TryGetValue("pathBase", out var oPathBase) ? oPathBase as string : HostContext.Config.PathBase,
                     Minify = !args.TryGetValue("minify", out var oMinify) || oMinify is bool bMinify && bMinify,
                     SaveToDisk = args.TryGetValue("disk", out var oDisk) && oDisk is bool bDisk && bDisk,
                     Cache = !args.TryGetValue("cache", out var oCache) || oCache is bool bCache && bCache,
@@ -833,9 +847,12 @@ namespace ServiceStack
                 options.ActivePath = request.PathInfo;
             if (options.Attributes == null)
                 options.Attributes = request.GetUserAttributes();
+            var pathBase = HostContext.Config.PathBase;
+            if (!string.IsNullOrEmpty(pathBase))
+                options.BaseHref = pathBase;
                 
             return options;
         }
-    }
+   }
 
 }

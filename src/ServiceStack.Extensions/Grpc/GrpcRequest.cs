@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.Net;
+using System.Threading.Tasks;
 using Grpc.Core;
 using ProtoBuf.Grpc;
 using ServiceStack.Configuration;
@@ -55,7 +56,32 @@ namespace ServiceStack.Grpc
 
             foreach (var header in context.RequestHeaders)
             {
-                this.Headers[header.Key] = header.Value;
+                var key = header.Key;
+                if (header.Key.IndexOf('.') >= 0)
+                {
+                    if (header.Key.StartsWith("query."))
+                    {
+                        this.QueryString[header.Key.Substring(6)] = header.Value;
+                        continue;
+                    }
+                    if (header.Key.StartsWith("form."))
+                    {
+                        this.FormData[header.Key.Substring(5)] = header.Value;
+                        continue;
+                    }
+                    if (header.Key.StartsWith("cookie."))
+                    {
+                        var name = header.Key.Substring(7); 
+                        this.Cookies[name] = new Cookie(name, header.Value);
+                        continue;
+                    }
+                    if (header.Key.StartsWith("header."))
+                    {
+                        key = header.Key.Substring(7);
+                    }
+                }
+
+                this.Headers[key] =  header.Value;
             }
 
             if (context.ServerCallContext.UserState != null)
@@ -138,6 +164,7 @@ namespace ServiceStack.Grpc
         public bool UseBufferedStream { get; set; }
 
         public string GetRawBody() => null;
+        public Task<string> GetRawBodyAsync() => Task.FromResult((string)null);
 
         public string RawUrl { get; set; }
 

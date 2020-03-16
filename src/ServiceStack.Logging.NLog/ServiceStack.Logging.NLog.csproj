@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ServiceStack.Interfaces\ServiceStack.Interfaces.csproj" />
+    <PackageReference Include="ServiceStack.Text" Version="$(Version)" />
     <PackageReference Include="NLog" Version="4.6.8" />
   </ItemGroup>
 

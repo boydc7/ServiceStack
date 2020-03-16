@@ -205,7 +205,8 @@ namespace ServiceStack
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static object GetItem(this IRequest httpReq, string key)
         {
-            if (httpReq == null) return null;
+            if (httpReq == null) 
+                return null;
 
             httpReq.Items.TryGetValue(key, out var value);
             return value;
@@ -232,7 +233,8 @@ namespace ServiceStack
 
         public static void ReleaseIfInProcessRequest(this IRequest httpReq)
         {
-            if (httpReq == null) return;
+            if (httpReq == null) 
+                return;
 
             httpReq.RequestAttributes = httpReq.RequestAttributes & ~RequestAttributes.InProcess;
         }

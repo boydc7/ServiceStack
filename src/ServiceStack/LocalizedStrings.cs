@@ -47,6 +47,11 @@
         public const string Model = "Model";
         public const string HttpStatus = "httpstatus";
         public const string GrpcResponseStatus = "responsestatus-bin";
+        public const string Dynamic = nameof(Dynamic);
+        public const string Id = nameof(Id);
+        public const string Result = nameof(Result);
+        public const string RowVersion = nameof(RowVersion);
+        public const string Count = nameof(Count);
     }
 
     public static class LocalizedStrings

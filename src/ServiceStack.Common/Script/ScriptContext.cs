@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ServiceStack.Configuration;
@@ -170,12 +171,12 @@ namespace ServiceStack.Script
         public bool RenderExpressionExceptions { get; set; }
 
         /// <summary>
-        /// What argument to assign Filter Exceptions to
+        /// What argument to assign Exceptions to
         /// </summary>
         public string AssignExceptionsTo { get; set; }
         
         /// <summary>
-        /// Whether to skip executing Filters if an Exception was thrown
+        /// Whether to skip executing expressions if an Exception was thrown
         /// </summary>
         public bool SkipExecutingFiltersIfError { get; set; }
 
@@ -302,15 +303,14 @@ namespace ServiceStack.Script
         }
 
         private SharpPage emptyPage;
-        public SharpPage EmptyPage => emptyPage ?? (emptyPage = OneTimePage("")); 
+        public SharpPage EmptyPage => emptyPage ??= OneTimePage(""); 
 
         
         private static InMemoryVirtualFile emptyFile;
         public InMemoryVirtualFile EmptyFile =>
-            emptyFile ?? (emptyFile = new InMemoryVirtualFile(SharpPages.TempFiles, SharpPages.TempDir) {
+            emptyFile ??= new InMemoryVirtualFile(SharpPages.TempFiles, SharpPages.TempDir) {
                 FilePath = "empty", TextContents = ""
-            }); 
-
+            }; 
         
         public SharpPage OneTimePage(string contents, string ext=null) 
             => Pages.OneTimePage(contents, ext ?? PageFormats.First().Extension);
@@ -619,6 +619,9 @@ namespace ServiceStack.Script
     public static class ScriptContextUtils
     {
         public static string ErrorNoReturn = "Script did not return a value. Use EvaluateScript() to return script output instead";
+        
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static void ThrowNoReturn() => throw new NotSupportedException("Script did not return a value");
 
         public static bool ShouldRethrow(Exception e) =>
             e is ScriptException;

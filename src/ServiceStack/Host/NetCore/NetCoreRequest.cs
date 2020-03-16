@@ -1,6 +1,6 @@
 ﻿
 
-using Microsoft.AspNetCore.WebUtilities;
+using System.Threading.Tasks;
 #if NETSTANDARD2_1
 using System;
 using System.Collections.Generic;
@@ -17,14 +17,14 @@ using Microsoft.AspNetCore.Http.Internal;
 using Microsoft.Extensions.DependencyInjection;
 using ServiceStack.Configuration;
 using ServiceStack.IO;
+using ServiceStack.Model;
 using ServiceStack.NetCore;
+using ServiceStack.Text;
 
 namespace ServiceStack.Host.NetCore
 {
-    public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IServiceProvider, IHasBufferedStream
+    public class NetCoreRequest : IHttpRequest, IHasResolver, IHasVirtualFiles, IServiceProvider, IHasBufferedStream, IHasStringId
     {
-        private static readonly string tempDirectory = Environment.GetEnvironmentVariable("ASPNETCORE_TEMP") ?? Path.GetTempPath();
-
         public static ILog log = LogManager.GetLogger(typeof(NetCoreRequest));
 
         private IResolver resolver;
@@ -200,7 +200,7 @@ namespace ServiceStack.Host.NetCore
         {
             get => BufferedStream != null;
             set => BufferedStream = value
-                ? BufferedStream ?? request.Body.CreateBufferedStream()
+                ? BufferedStream ?? request.AllowSyncIO().Body.CreateBufferedStream()
                 : null;
         }
 
@@ -208,25 +208,21 @@ namespace ServiceStack.Host.NetCore
         {
             if (BufferedStream != null)
             {
-                EnableRewind();
+                request.EnableBuffering();
                 return BufferedStream.ReadBufferedStreamToEnd(this);
             }
-
-            return request.Body.ReadToEnd();
+            return request.AllowSyncIO().Body.ReadToEnd();
         }
 
-        private void EnableRewind(
-            int bufferThreshold = 30720,
-            long? bufferLimit = null)
+        public Task<string> GetRawBodyAsync()
         {
-            var body = request.Body;
-
-            if (!body.CanSeek)
+            if (BufferedStream != null)
             {
-                var bufferingReadStream = new FileBufferingReadStream(body, bufferThreshold, bufferLimit, tempDirectory);
-                request.Body = bufferingReadStream;
-                request.HttpContext.Response.RegisterForDispose(bufferingReadStream);
+                request.EnableBuffering();
+                return Task.FromResult(BufferedStream.ReadBufferedStreamToEnd(this));
             }
+
+            return request.Body.ReadToEndAsync();
         }
 
         public long ContentLength => request.ContentLength.GetValueOrDefault();
@@ -343,6 +339,8 @@ namespace ServiceStack.Host.NetCore
                 return isFile.Value;
             }
         }
+
+        public string Id => System.Diagnostics.Activity.Current?.Id ?? HttpContext.TraceIdentifier;
     }
 }
 

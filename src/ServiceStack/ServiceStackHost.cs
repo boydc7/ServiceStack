@@ -3,14 +3,11 @@
 
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using Funq;
@@ -33,7 +30,6 @@ using ServiceStack.VirtualPath;
 using ServiceStack.Web;
 using ServiceStack.Redis;
 using ServiceStack.Script;
-using static System.String;
 
 namespace ServiceStack
 {
@@ -140,6 +136,9 @@ namespace ServiceStack
             };
             StartUpErrors = new List<ResponseStatus>();
             AsyncErrors = new List<ResponseStatus>();
+            DefaultScriptContext = new ScriptContext {
+                ScriptLanguages = { ScriptLisp.Language },
+            }.InitForSharpPages(this);
             PluginsLoaded = new List<string>();
             Plugins = new List<IPlugin> {
                 new HtmlFormat(),
@@ -594,6 +593,85 @@ namespace ServiceStack
         public List<Func<IRequest, object, Task>> GatewayResponseFiltersAsync { get; set; }
         internal Func<IRequest, object, Task>[] GatewayResponseFiltersAsyncArray;
 
+        public ScriptContext DefaultScriptContext { get; set; }
+
+        /// <summary>
+        /// Global #Script ScriptContext for AppHost. Returns SharpPagesFeature plugin or fallsback to DefaultScriptContext.
+        /// </summary>
+        public ScriptContext ScriptContext => scriptContext ??= (GetPlugin<SharpPagesFeature>() ?? DefaultScriptContext);
+        private ScriptContext scriptContext;
+
+        /// <summary>
+        /// Evaluate Expressions in ServiceStack's ScriptContext.
+        /// Can be overriden if you want to customize how different expressions are evaluated.
+        /// </summary>
+        public virtual object EvalExpressionCached(string expr) => JS.evalCached(ScriptContext, expr);
+        public virtual object EvalExpression(string expr) => JS.eval(ScriptContext, expr);
+
+        /// <summary>
+        /// Evaluate a script value, `IScriptValue.Expression` results are cached globally.
+        /// If `IRequest` is provided, results from the same `IScriptValue.Eval` are cached per request. 
+        /// </summary>
+        public virtual object EvalScriptValue(IScriptValue scriptValue, IRequest req = null, Dictionary<string, object> args=null)
+        {
+            if (scriptValue == null)
+                throw new ArgumentNullException(nameof(scriptValue));
+
+            if (scriptValue.Value != null)
+                return scriptValue.Value;
+
+            if (scriptValue.Expression != null)
+            {
+                return !scriptValue.NoCache
+                    ? EvalExpressionCached(scriptValue.Expression)
+                    : JS.eval(scriptValue.Expression);
+            }
+
+            if (scriptValue.Eval == null)
+                return null;
+
+            var evalCode = ScriptCodeUtils.EnsureReturn(scriptValue.Eval);
+
+            object value = null;
+            var evalCacheKey = JS.EvalCacheKeyPrefix + evalCode;
+
+            if (!scriptValue.NoCache && req?.Items.TryGetValue(evalCacheKey, out value) == true)
+                return value;
+
+            // Cache AST Globally
+            var evalAstCacheKey = JS.EvalAstCacheKeyPrefix + evalCode;
+            var cachedCodePage = (SharpPage)ScriptContext.Cache.GetOrAdd(evalAstCacheKey, key =>
+                ScriptContext.CodeSharpPage(evalCode));
+            
+            value = EvalScript(new PageResult(cachedCodePage), req, args);
+            if (!scriptValue.NoCache && req != null)
+                req.Items[evalCacheKey] = value;
+
+            return value;
+        }
+
+        public virtual object EvalScript(PageResult pageResult, IRequest req = null, Dictionary<string, object> args=null)
+        {
+            if (args != null)
+            {
+                foreach (var entry in args)
+                {
+                    pageResult.Args[entry.Key] = entry.Value;
+                }
+            }
+
+            if (req != null)
+            {
+                pageResult.Args[ScriptConstants.Request] = req;
+                pageResult.Args[ScriptConstants.Dto] = req.Dto;
+            }
+
+            if (!pageResult.EvaluateResult(out var returnValue))
+                ScriptContextUtils.ThrowNoReturn();
+
+            return ScriptLanguage.UnwrapValue(returnValue);
+        }
+
         /// <summary>
         /// Executed immediately before a Service is executed. Use return to change the request DTO used, must be of the same type.
         /// </summary>
@@ -615,6 +693,8 @@ namespace ServiceStack
         /// </summary>
         public virtual async Task<object> OnServiceException(IRequest httpReq, object request, Exception ex)
         {
+            httpReq.Items[nameof(OnServiceException)] = bool.TrueString;
+            
             object lastError = null;
             foreach (var errorHandler in ServiceExceptionHandlers)
             {
@@ -642,7 +722,11 @@ namespace ServiceStack
             }
         }
 
-        public virtual Task HandleUncaughtException(IRequest httpReq, IResponse httpRes, string operationName, Exception ex)
+        [Obsolete("Use HandleResponseException")]
+        protected virtual Task HandleUncaughtException(IRequest httpReq, IResponse httpRes, string operationName, Exception ex) =>
+            HandleResponseException(httpReq, httpRes, operationName, ex);
+        
+        public virtual Task HandleResponseException(IRequest httpReq, IResponse httpRes, string operationName, Exception ex)
         {
             //Only add custom error messages to StatusDescription
             var httpError = ex as IHttpError;
@@ -656,18 +740,24 @@ namespace ServiceStack
 
         public virtual async Task HandleShortCircuitedErrors(IRequest req, IResponse res, object requestDto)
         {
-            var httpError = new HttpError(res.StatusCode, res.StatusDescription);
-            var response = await OnServiceException(req, requestDto, httpError);
-            if (response != null)
+            object response = null;
+            try
             {
-                await res.EndHttpHandlerRequestAsync(afterHeaders: async httpRes =>
+                var httpError = new HttpError(res.StatusCode, res.StatusDescription);
+                response = await OnServiceException(req, requestDto, httpError);
+                if (response != null)
                 {
-                    await ContentTypes.SerializeToStreamAsync(req, response, httpRes.OutputStream);
-                });
+                    await res.EndHttpHandlerRequestAsync(afterHeaders: async httpRes => {
+                        await ContentTypes.SerializeToStreamAsync(req, response, httpRes.OutputStream);
+                    });
+                }
             }
-            else
+            finally
             {
-                res.EndRequest();
+                if (response == null)
+                {
+                    res.EndRequest();
+                }
             }
         }
 
@@ -776,8 +866,16 @@ namespace ServiceStack
             if ((Feature.MsgPack & config.EnableFeatures) != Feature.MsgPack)
                 Plugins.RemoveAll(x => x is IMsgPackPlugin);  //external
 
-            if (config.HandlerFactoryPath != null)
-                config.HandlerFactoryPath = config.HandlerFactoryPath.TrimStart('/');
+            if (!string.IsNullOrEmpty(config.HandlerFactoryPath))
+            {
+                var handlerPath = config.HandlerFactoryPath.TrimStart('/');
+                config.HandlerFactoryPath = handlerPath; 
+                config.PathBase = handlerPath[0] != '/' ? '/' + handlerPath : null;
+            }
+            else
+            {
+                config.HandlerFactoryPath = null;
+            }
 
             if (config.UseCamelCase && JsConfig.TextCase == TextCase.Default)
                 ServiceStack.Text.Config.UnsafeInit(new Text.Config { TextCase = TextCase.CamelCase });
@@ -792,6 +890,10 @@ namespace ServiceStack
             var plugins = Plugins.ToArray();
             delayedLoadPlugin = true;
             LoadPluginsInternal(plugins);
+
+            // If another ScriptContext (i.e. SharpPagesFeature) is already registered, don't override its IOC registrations.
+            if (!Container.Exists<ISharpPages>())
+                DefaultScriptContext.Init();
 
             AfterPluginsLoaded(specifiedContentType);
 
@@ -831,7 +933,7 @@ namespace ServiceStack
 
             if (Config.StrictMode == true && !JsConfig.HasInit)
                 JsConfig.Init(); //Ensure JsConfig global config is not mutated after StartUp
-
+            
             if (config.LogUnobservedTaskExceptions)
             {
                 TaskScheduler.UnobservedTaskException += this.HandleUnobservedTaskException;
@@ -892,9 +994,9 @@ namespace ServiceStack
 
         private void AfterPluginsLoaded(string specifiedContentType)
         {
-            if (!IsNullOrEmpty(specifiedContentType))
+            if (!string.IsNullOrEmpty(specifiedContentType))
                 config.DefaultContentType = specifiedContentType;
-            else if (IsNullOrEmpty(config.DefaultContentType))
+            else if (string.IsNullOrEmpty(config.DefaultContentType))
                 config.DefaultContentType = MimeTypes.Json;
 
             Config.PreferredContentTypes.Remove(Config.DefaultContentType);
@@ -1038,7 +1140,7 @@ namespace ServiceStack
             return new ServiceRunner<TRequest>(this, actionContext);
         }
 
-        public virtual string ResolveLocalizedString(string text, IRequest request)
+        public virtual string ResolveLocalizedString(string text, IRequest request=null)
         {
             return text;
         }
@@ -1126,6 +1228,7 @@ namespace ServiceStack
 
         public virtual object ExecuteMessage(IMessage dto, IRequest req) => ServiceController.ExecuteMessage(dto, req);
 
+        public virtual void RegisterService<T>(params string[] atRestPaths) where T : IService => RegisterService(typeof(T), atRestPaths);
         public virtual void RegisterService(Type serviceType, params string[] atRestPaths)
         {
             ServiceController.RegisterService(serviceType);
@@ -1258,7 +1361,7 @@ namespace ServiceStack
                 {
                     var reqInfo = RequestInfoHandler.GetRequestInfo(httpReq);
 
-                    reqInfo.Host = Config.DebugHttpListenerHostEnvironment + "_v" + Env.ServiceStackVersion + "_" + ServiceName;
+                    reqInfo.Host = Config.DebugHttpListenerHostEnvironment + "_v" + Env.VersionString + "_" + ServiceName;
                     reqInfo.PathInfo = httpReq.PathInfo;
                     reqInfo.GetPathUrl = httpReq.GetPathUrl();
 

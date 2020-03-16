@@ -73,7 +73,7 @@ namespace ServiceStack
         /// </summary>
         public virtual void ApplyPreAuthenticateFilters(IRequest httpReq, IResponse httpRes)
         {
-            httpReq.Items[Keywords.HasPreAuthenticated] = true;
+            httpReq.Items[Keywords.HasPreAuthenticated] = bool.TrueString;
             foreach (var authProvider in AuthenticateService.AuthWithRequestProviders)
             {
                 authProvider.PreAuthenticate(httpReq, httpRes);
@@ -413,7 +413,8 @@ namespace ServiceStack
 
         public void AssertFeatures(Feature usesFeatures)
         {
-            if (Config.EnableFeatures == Feature.All) return;
+            if (Config.EnableFeatures == Feature.All) 
+                return;
 
             if (!HasFeature(usesFeatures))
             {
@@ -734,7 +735,7 @@ namespace ServiceStack
         /// </summary>
         /// <param name="req">Provided by services and pageView, can be helpful when overriding this method</param>
         /// <returns>Nullable MemoryCacheClient</returns>
-        public virtual MemoryCacheClient GetMemoryCacheClient(IRequest req) => Container.TryResolve<MemoryCacheClient>();
+        public virtual MemoryCacheClient GetMemoryCacheClient(IRequest req=null) => Container.TryResolve<MemoryCacheClient>() ?? DefaultCache;
 
         /// <summary>
         /// Returns <see cref="IMessageProducer"></see> from the IOC container.

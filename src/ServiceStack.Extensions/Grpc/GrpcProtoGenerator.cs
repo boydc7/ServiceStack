@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading.Tasks;
 using ProtoBuf.Meta;
 using ServiceStack.DataAnnotations;
@@ -19,11 +21,44 @@ namespace ServiceStack.Grpc
         readonly GrpcFeature grpc;
         public static string Package { get; set; }
 
+        public static Func<List<Type>, string> DefaultNamespace { get; set; } = ResolveDefaultNamespace;
+        
+        public static string ResolveDefaultNamespace(List<Type> orderedTypes)
+        {
+            var ns = orderedTypes.FirstOrDefault(x =>
+                    x.Namespace != null && !"ServiceStack".StartsWith(x.Namespace) && !"System".StartsWith(x.Namespace))?.Namespace
+                ?? orderedTypes[0].Namespace;
+            var pos = ns?.IndexOf(".ServiceModel", StringComparison.OrdinalIgnoreCase) ?? -1;
+            return pos >= 0 ? ns.Substring(0, pos) : ns;
+        }
+        
+        public static Func<string,string> ResolvePackageName { get; set; } = globalNs =>
+            globalNs.Replace(".","_").ToLowercaseUnderscore().Replace("__","_").Replace("service_stack","servicestack");
+
         public GrpcProtoGenerator(MetadataTypesConfig config)
         {
             Config = config;
             feature = HostContext.AssertPlugin<NativeTypesFeature>();
             grpc = HostContext.AssertPlugin<GrpcFeature>();
+        }
+
+        static MethodInfo getSchemaMethod;
+        static readonly ConcurrentDictionary<Type, string> SchemaTypeNamesCache = new ConcurrentDictionary<Type, string>();
+
+        public string GetSchemaTypeName(Type type)
+        {
+            if (getSchemaMethod == null)
+            {
+                getSchemaMethod = typeof(MetaType).GetMethod("GetSchemaTypeName",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            return SchemaTypeNamesCache.GetOrAdd(type, key => {
+                if (getSchemaMethod != null)
+                    return (string) getSchemaMethod.Invoke(GrpcConfig.TypeModel[type], null);
+
+                return type.Name;
+            });
         }
 
         public string GetCode(MetadataTypes metadata, IRequest request)
@@ -36,11 +71,11 @@ namespace ServiceStack.Grpc
             var sb = new StringBuilderWrapper(sbInner);
             sb.AppendLine("/* Options:");
             sb.AppendLine("Date: {0}".Fmt(DateTime.Now.ToString("s").Replace("T"," ")));
-            sb.AppendLine("Version: {0}".Fmt(Env.ServiceStackVersion));
+            sb.AppendLine("Version: {0}".Fmt(Env.VersionString));
             sb.AppendLine("Tip: {0}".Fmt(HelpMessages.NativeTypesDtoOptionsTip.Fmt("//")));
             sb.AppendLine("BaseUrl: {0}".Fmt(Config.BaseUrl));
             sb.AppendLine();
-            sb.AppendLine("{0}Package: {1}".Fmt(defaultValue("Package"), Config.Package));
+            //sb.AppendLine("{0}Package: {1}".Fmt(defaultValue("Package"), Config.Package));
             sb.AppendLine("{0}GlobalNamespace: {1}".Fmt(defaultValue("GlobalNamespace"), Config.GlobalNamespace));
             sb.AppendLine("{0}AddDescriptionAsComments: {1}".Fmt(defaultValue("AddDescriptionAsComments"), Config.AddDescriptionAsComments));
 //            sb.AppendLine("{0}IncludeTypes: {1}".Fmt(defaultValue("IncludeTypes"), Config.IncludeTypes.Safe().ToArray().Join(",")));
@@ -71,11 +106,11 @@ namespace ServiceStack.Grpc
                     ServiceMetadata.AddReferencedTypes(types, resType);
                     if (isTask)
                     {
-                        services.Add((reqType, $"rpc {method.Name}({reqType.Name}) returns ({resType.Name}) {{}}"));
+                        services.Add((reqType, $"rpc {method.Name}({GetSchemaTypeName(reqType)}) returns ({GetSchemaTypeName(resType)}) {{}}"));
                     }
                     else
                     {
-                        services.Add((reqType, $"rpc {method.Name}({reqType.Name}) returns (stream {resType.Name}) {{}}"));
+                        services.Add((reqType, $"rpc {method.Name}({GetSchemaTypeName(reqType)}) returns (stream {GetSchemaTypeName(resType)}) {{}}"));
                     }
                 }
             }
@@ -87,24 +122,35 @@ namespace ServiceStack.Grpc
 
             var addedRpcServices = false;
             //https://github.com/protobuf-net/protobuf-net/blob/master/src/Tools/bcl.proto
-            var proto = GrpcUtils.TypeModel.GetSchema(null /*all types*/, ProtoSyntax.Proto3);
+            var proto = GrpcConfig.TypeModel.GetSchema(null /*all types*/, ProtoSyntax.Proto3);
             foreach (var line in proto.ReadLines())
             {
-                if (line.StartsWith("package "))
-                {
-                    var globalNs = Config.GlobalNamespace ?? orderedTypes[0].Namespace; 
-                    sb.AppendLine($"package {Config.Package ?? globalNs.ToLowercaseUnderscore()};");
-                    sb.AppendLine($"option csharp_namespace = \"{globalNs}\";");
+                if (line.StartsWith("package ")) // strip
                     continue;
-                }
 
                 sb.AppendLine(line);
 
                 if (!addedRpcServices && string.IsNullOrEmpty(line))
                 {
                     addedRpcServices = true;
+
+                    if (Config.GlobalNamespace == null)
+                        Config.GlobalNamespace = DefaultNamespace(orderedTypes);
+
+                    //sb.AppendLine($"package {Config.Package ?? ResolvePackageName(globalNs.Replace(".","_").ToLowercaseUnderscore().Replace("__","_"))};");
+
+                    foreach (var optionFn in grpc.ProtoOptions)
+                    {
+                        var option = optionFn(request, Config);
+                        if (!string.IsNullOrEmpty(option))
+                        {
+                            sb.AppendLine(option);
+                        }
+                    }
                     
-                    sb.AppendLine($"services {grpc.GrpcServicesType.Name} {{");
+                    sb.AppendLine();
+                    
+                    sb.AppendLine($"service {grpc.GrpcServicesType.Name} {{");
                     sb = sb.Indent();
 
                     foreach (var service in services)
@@ -131,8 +177,6 @@ namespace ServiceStack.Grpc
                     sb.AppendLine();
                 }
             }
-            
-            sb.AppendLine(proto);
 
             return StringBuilderCache.ReturnAndFree(sbInner);
         }

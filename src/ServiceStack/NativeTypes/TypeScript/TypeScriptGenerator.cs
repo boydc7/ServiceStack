@@ -131,7 +131,7 @@ namespace ServiceStack.NativeTypes.TypeScript
             var sb = new StringBuilderWrapper(sbInner);
             sb.AppendLine("/* Options:");
             sb.AppendLine("Date: {0}".Fmt(DateTime.Now.ToString("s").Replace("T", " ")));
-            sb.AppendLine("Version: {0}".Fmt(Env.ServiceStackVersion));
+            sb.AppendLine("Version: {0}".Fmt(Env.VersionString));
             sb.AppendLine("Tip: {0}".Fmt(HelpMessages.NativeTypesDtoOptionsTip.Fmt("//")));
             sb.AppendLine("BaseUrl: {0}".Fmt(Config.BaseUrl));
             sb.AppendLine();
@@ -310,8 +310,12 @@ namespace ServiceStack.NativeTypes.TypeScript
                             var name = type.EnumNames[i];
                             var value = type.EnumValues?[i];
 
-                            if (type.EnumMemberValues != null && type.EnumMemberValues[i] != name)
-                                value = $"'{type.EnumMemberValues[i]}'";
+                            var memberValue = type.GetEnumMemberValue(i);
+                            if (memberValue != null)
+                            {
+                                sb.AppendLine($"{name} = '{memberValue}',");
+                                continue;
+                            }
 
                             sb.AppendLine(value == null 
                                 ? $"{name} = '{name}',"

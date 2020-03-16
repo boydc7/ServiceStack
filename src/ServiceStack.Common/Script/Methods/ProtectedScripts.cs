@@ -35,6 +35,12 @@ namespace ServiceStack.Script
             return instance;
         }
         
+        public object @default(string typeName)
+        {
+            var type = assertTypeOf(typeName);
+            return type.GetDefaultValue();
+        }
+
         public object @new(string typeName)
         {
             var type = @typeof(typeName);
@@ -271,39 +277,30 @@ namespace ServiceStack.Script
                 }
                 else
                 {
-                    switch (_typeName)
-                    {
-                        case "bool":
-                            return !isArray ? typeof(bool) : typeof(bool[]);
-                        case "byte":
-                            return !isArray ? typeof(byte) : typeof(byte[]);
-                        case "sbyte":
-                            return !isArray ? typeof(sbyte) : typeof(sbyte[]);
-                        case "char":
-                            return !isArray ? typeof(char) : typeof(char[]);
-                        case "decimal":
-                            return !isArray ? typeof(decimal) : typeof(decimal[]);
-                        case "double":
-                            return !isArray ? typeof(double) : typeof(double[]);
-                        case "float":
-                            return !isArray ? typeof(float) : typeof(float[]);
-                        case "int":
-                            return !isArray ? typeof(int) : typeof(int[]);
-                        case "uint":
-                            return !isArray ? typeof(uint) : typeof(uint[]);
-                        case "long":
-                            return !isArray ? typeof(long) : typeof(long[]);
-                        case "ulong":
-                            return !isArray ? typeof(ulong) : typeof(ulong[]);
-                        case "object":
-                            return !isArray ? typeof(object) : typeof(object[]);
-                        case "short":
-                            return !isArray ? typeof(short) : typeof(short[]);
-                        case "ushort":
-                            return !isArray ? typeof(ushort) : typeof(ushort[]);
-                        case "string":
-                            return !isArray ? typeof(string) : typeof(string[]);
-                    }
+                    var ret = _typeName switch {
+                        "int" => !isArray ? typeof(int) : typeof(int[]),
+                        "long" => !isArray ? typeof(long) : typeof(long[]),
+                        "bool" => !isArray ? typeof(bool) : typeof(bool[]),
+                        "char" => !isArray ? typeof(char) : typeof(char[]),
+                        "double" => !isArray ? typeof(double) : typeof(double[]),
+                        "float" => !isArray ? typeof(float) : typeof(float[]),
+                        "decimal" => !isArray ? typeof(decimal) : typeof(decimal[]),
+                        "byte" => !isArray ? typeof(byte) : typeof(byte[]),
+                        "sbyte" => !isArray ? typeof(sbyte) : typeof(sbyte[]),
+                        "uint" => !isArray ? typeof(uint) : typeof(uint[]),
+                        "ulong" => !isArray ? typeof(ulong) : typeof(ulong[]),
+                        "object" => !isArray ? typeof(object) : typeof(object[]),
+                        "short" => !isArray ? typeof(short) : typeof(short[]),
+                        "ushort" => !isArray ? typeof(ushort) : typeof(ushort[]),
+                        "string" => !isArray ? typeof(string) : typeof(string[]),
+                        "Guid" => !isArray ? typeof(Guid) : typeof(Guid[]),
+                        "TimeSpan" => !isArray ? typeof(TimeSpan) : typeof(TimeSpan[]),
+                        "DateTime" => !isArray ? typeof(DateTime) : typeof(DateTime[]),
+                        "DateTimeOffset" => !isArray ? typeof(DateTimeOffset) : typeof(DateTimeOffset[]),
+                        _ => null,
+                    };
+                    if (ret != null)
+                        return ret;
 
                     if (Context.ScriptTypeNameMap.TryGetValue(_typeName, out var type))
                         return cookType(type, genericArgs, isArray);
@@ -728,6 +725,9 @@ namespace ServiceStack.Script
         public string osPaths(string path) => Env.IsWindows
             ? path.Replace('/', '\\')
             : path.Replace('\\', '/');
+
+        public IVirtualFile resolveFile(ScriptScopeContext scope, string virtualPath) =>
+            ResolveFile(scope.Context.VirtualFiles, scope.PageResult.VirtualPath, virtualPath);
 
         public IVirtualFile ResolveFile(string filterName, ScriptScopeContext scope, string virtualPath)
         {
@@ -1435,5 +1435,7 @@ namespace ServiceStack.Script
             catch {}               
             return null;
         }
+
+        public void exit(int exitCode) => Environment.Exit(exitCode);
     }
 }

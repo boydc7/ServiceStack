@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Net;
+using System.Reflection;
+using System.Runtime.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -15,6 +17,7 @@ using ServiceStack.Caching;
 using ServiceStack.Configuration;
 using ServiceStack.DataAnnotations;
 using ServiceStack.Host;
+using ServiceStack.Logging;
 using ServiceStack.Mvc;
 using ServiceStack.NativeTypes.TypeScript;
 using ServiceStack.Text;
@@ -88,9 +91,23 @@ namespace CheckWebCore
     {
         public void Configure(IApplicationBuilder app)=> "#9".Print();           // #9
     }
-    
 
-    public class AppHost : AppHostBase, IConfigureApp
+
+    public interface IAppHostConstraint{}
+    public class AppHostConstraint : IAppHostConstraint{}
+    public abstract class AppHostConstraintsBase<TServiceInterfaceAssembly> : AppHostBase
+        where TServiceInterfaceAssembly : IAppHostConstraint
+    {
+        protected AppHostConstraintsBase(string serviceName, params Assembly[] assembliesWithServices) 
+        : base(serviceName, assembliesWithServices)
+        {
+            ConsoleLogFactory.Configure();
+        }
+    }
+
+    public class AppHost 
+        //: AppHostConstraintsBase<AppHostConstraint>, IConfigureApp
+        : AppHostBase, IConfigureApp
     {
         public AppHost() : base("TestLogin", typeof(MyServices).Assembly) { }
 
@@ -100,6 +117,7 @@ namespace CheckWebCore
 
             app.UseServiceStack(new AppHost
             {
+                PathBase = "/api",
                 AppSettings = new NetCoreAppSettings(Configuration)
             });
         }
@@ -114,6 +132,8 @@ namespace CheckWebCore
         // Configure your AppHost with the necessary configuration and dependencies your App needs
         public override void Configure(Container container)
         {
+            RegisterService<GetFileService>();
+
             Plugins.Add(new GrpcFeature(App));
             
             // enable server-side rendering, see: https://sharpscript.net
@@ -229,21 +249,94 @@ namespace CheckWebCore
     {
         public int Id { get; set; }
     }
+    
+    public enum EnumMemberTest
+    {
+        [EnumMember(Value = "No ne")] None = 0,
+        [EnumMember(Value = "Template")] Template = 1,
+        [EnumMember(Value = "Rule")] Rule = 3,
+    }
 
     public class Dummy
     {
         public Campaign Campaign { get; set; }
         public DataEvent DataEvent { get; set; }
         public ExtendsDictionary ExtendsDictionary { get; set; }
+        public EnumMemberTest EnumMemberTest { get; set; }
     }
    
     public class ExtendsDictionary : Dictionary<Guid, string> {
     }
+    
+    [Route("/hello/body")]
+    public class HelloBody : IReturn<HelloBodyResponse>
+    {
+        public string Name { get; set; }
+    }
 
+    public class HelloBodyResponse
+    {
+        public string Message { get; set; }
+        public string Body { get; set; }
+        public ResponseStatus ResponseStatus { get; set; }
+    }
+
+    [Route("/bookings/repeat",
+        Summary = "Create new bookings",
+        Notes = "Create new bookings if you are authorized to do so.",
+        Verbs = "POST")]
+    [ApiResponse(HttpStatusCode.Unauthorized, "You were unauthorized to call this service")]
+    //[Restrict(VisibleLocalhostOnly = true)]
+    public class CreateBookings : CreateBookingBase ,IReturn<CreateBookingsResponse>
+    {
+
+        [ApiMember(
+        Description =
+        "Set the dates you want to book and it's quantities. It's an array of dates and quantities.",
+        IsRequired = true)]
+        public List<DatesToRepeat> DatesToRepeat { get; set; }
+    }
+
+    public class CreateBookingBase
+    {
+        public int Id { get; set; }
+    }
+
+    public class CreateBookingsResponse
+    {
+        public ResponseStatus ResponseStatus { get; set; }
+    }
+
+    public class DatesToRepeat
+    {
+        public int Ticks { get; set; }
+    }
+    
+    
+    [Route("/swagger/search", "POST")]
+    public class SwaggerSearch : IReturn<EmptyResponse>, IPost
+    {
+        public List<SearchFilter> Filters { get; set; }
+    }
+
+    public class SearchFilter
+    {
+        [ApiMember(Name = "Field")]
+        public string Field { get; set; }
+
+        [ApiMember(Name = "Values")]
+        public List<string> Values { get; set; }
+
+        [ApiMember(Name = "Type")]
+        public string Type { get; set; }
+    }
+    
 
     //    [Authenticate]
     public class MyServices : Service
     {
+        public object Any(CreateBookings request) => new CreateBookingsResponse();
+        
         public object Any(Dummy request) => request;
         public object Any(Campaign request) => request;
         
@@ -287,5 +380,40 @@ namespace CheckWebCore
 
             return new ImportDataResponse();
         }
+
+        public object Any(HelloBody request)
+        {
+            var body = Request.GetRawBody();
+            var to = new HelloBodyResponse {
+                Message = $"Hello, {request.Name}",
+                Body = body,
+            };
+            return to;
+        }
+
+        public object Any(ImpersonateUser request)
+        {
+            using (var service = base.ResolveService<AuthenticateService>()) //In Process
+            {
+                service.Post(new Authenticate { provider = "logout" });
+                
+                return service.Post(new Authenticate {
+                    provider = AuthenticateService.CredentialsProvider,
+                    UserName = request.UserName,
+                });
+            }
+        }
+        
+        public object Any(SwaggerSearch request) => new EmptyResponse();
     }
+    
+    // [RequiredRole("Admin")]
+    [Restrict(InternalOnly=true)]
+    [Route("/impersonate/{UserName}")]
+    public class ImpersonateUser
+    {
+        public string UserName { get; set; }
+    }
+
 }
+

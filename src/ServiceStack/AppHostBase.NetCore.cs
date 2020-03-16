@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using ServiceStack.Web;
@@ -23,12 +24,38 @@ using ServiceStack.IO;
 
 namespace ServiceStack
 {
-    public abstract class AppHostBase : ServiceStackHost, IConfigureServices, IRequireConfiguration
+    public abstract class AppHostBase : ServiceStackHost, IAppHostNetCore, IConfigureServices, IRequireConfiguration
     {
         protected AppHostBase(string serviceName, params Assembly[] assembliesWithServices)
             : base(serviceName, assembliesWithServices) 
         {
             Platforms.PlatformNetCore.HostInstance = this;
+            
+            //IIS Mapping / sometimes UPPER CASE https://serverfault.com/q/292335
+            var iisPathBase = Environment.GetEnvironmentVariable("ASPNETCORE_APPL_PATH");
+            if (!string.IsNullOrEmpty(iisPathBase) && !iisPathBase.Any(char.IsLower))
+                iisPathBase = iisPathBase.ToLower();
+            PathBase = iisPathBase;
+        }
+
+        private string pathBase;
+        public string PathBase
+        {
+            get => pathBase;
+            set
+            {
+                if (!string.IsNullOrEmpty(value))
+                {
+                    if (value[0] != '/')
+                        throw new Exception("PathBase must start with '/'");
+                    
+                    pathBase = value.TrimEnd('/');
+                }
+                else
+                {
+                    pathBase = null;
+                }
+            }
         }
 
         IApplicationBuilder app;
@@ -41,6 +68,12 @@ namespace ServiceStack
         public virtual void Bind(IApplicationBuilder app)
         {
             this.app = app;
+
+            if (!string.IsNullOrEmpty(PathBase))
+            {
+                this.app.UsePathBase(PathBase);
+            }
+
             BindHost(this, app);
             app.Use(ProcessRequest);
         }
@@ -85,9 +118,11 @@ namespace ServiceStack
             base.OnConfigLoad();
             if (app != null)
             {
+                Config.DebugMode = HostingEnvironment.IsDevelopment();
+                Config.HandlerFactoryPath = PathBase?.TrimStart('/');
+
                 //Initialize VFS
                 Config.WebHostPhysicalPath = HostingEnvironment.ContentRootPath;
-                Config.DebugMode = HostingEnvironment.IsDevelopment();
 
                 if (VirtualFiles == null)
                 {
@@ -128,9 +163,10 @@ namespace ServiceStack
             var mode = Config.HandlerFactoryPath;
             if (!string.IsNullOrEmpty(mode))
             {
-                var includedInPathInfo = pathInfo.IndexOf(mode, StringComparison.Ordinal) == 1;
+                //IIS Reports "ASPNETCORE_APPL_PATH" in UPPER CASE
+                var includedInPathInfo = pathInfo.IndexOf(mode, StringComparison.OrdinalIgnoreCase) == 1;
                 var includedInPathBase = context.Request.PathBase.HasValue &&
-                                         context.Request.PathBase.Value.IndexOf(mode, StringComparison.Ordinal) == 1;
+                                         context.Request.PathBase.Value.IndexOf(mode, StringComparison.OrdinalIgnoreCase) == 1;
                 if (!includedInPathInfo && !includedInPathBase)
                 {
                     await next();
@@ -272,8 +308,19 @@ namespace ServiceStack
         public IConfiguration Configuration { get; set; }
     }
 
+    public interface IAppHostNetCore : IAppHost, IRequireConfiguration
+    {
+        IApplicationBuilder App { get; }
+        IHostingEnvironment HostingEnvironment { get; }
+    }
+
     public static class NetCoreAppHostExtensions
     {
+        public static IConfiguration GetConfiguration(this IAppHost appHost) => ((IAppHostNetCore)appHost).Configuration;
+        public static IApplicationBuilder GetApp(this IAppHost appHost) => ((IAppHostNetCore)appHost).App;
+        public static IServiceProvider GetApplicationServices(this IAppHost appHost) => ((IAppHostNetCore)appHost).App.ApplicationServices;
+        public static IHostingEnvironment GetHostingEnvironment(this IAppHost appHost) => ((IAppHostNetCore)appHost).HostingEnvironment;
+        
         public static IApplicationBuilder UseServiceStack(this IApplicationBuilder app, AppHostBase appHost)
         {
             appHost.Bind(app);

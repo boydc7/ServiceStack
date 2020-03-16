@@ -17,6 +17,11 @@
 #endregion
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using ServiceStack.FluentValidation.Internal;
+using ServiceStack.FluentValidation.Validators;
+using ServiceStack.Text;
 using ServiceStack.Web;
 
 namespace ServiceStack.FluentValidation
@@ -27,6 +32,50 @@ namespace ServiceStack.FluentValidation
     /// <typeparam name="T">The type of the object being validated</typeparam>
     public abstract partial class AbstractValidator<T> : IRequiresRequest
     {
+        /// <summary>
+        /// Validators are auto-wired transient instances
+        /// </summary>
+        protected AbstractValidator()
+        {
+            var appHost = HostContext.AppHost;
+            if (appHost == null) //Unit tests or stand-alone usage
+                return;
+            
+            if (ServiceStack.Validators.TypeRulesMap.TryGetValue(typeof(T), out var dtoRules))
+            {
+                foreach (var rule in dtoRules)
+                {
+                    Rules.Add(rule);
+                }
+            }
+
+            var source = appHost.TryResolve<IValidationSource>();
+            if (source != null)
+            {
+                var sourceRules = source.GetValidationRules(typeof(T)).ToList();
+                if (!sourceRules.IsEmpty())
+                {
+                    var typeRules = new List<IValidationRule>();
+                    foreach (var entry in sourceRules)
+                    {
+                        var pi = typeof(T).GetProperty(entry.Key);
+                        if (pi != null)
+                        {
+                            var propRule = ServiceStack.Validators.CreatePropertyRule(typeof(T), pi);
+                            typeRules.Add(propRule);
+                            var propValidators = (List<IPropertyValidator>) propRule.Validators;
+                            propValidators.AddRule(pi, entry.Value);
+                        }
+                    }
+
+                    foreach (var propertyValidator in typeRules)
+                    {
+                        Rules.Add(propertyValidator);
+                    }
+                }
+            }
+        }
+
         public virtual IRequest Request { get; set; }
 
         public virtual IServiceGateway Gateway => HostContext.AppHost.GetServiceGateway(Request);

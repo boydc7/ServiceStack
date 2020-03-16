@@ -96,7 +96,7 @@ namespace ServiceStack
                     "avi", "divx", "m3u", "mov", "mp3", "mpeg", "mpg", "qt", "vob", "wav", "wma", "wmv",
                     "flv", "swf", "xap", "xaml", "ogg", "ogv", "mp4", "webm", "eot", "ttf", "woff", "woff2", "map",
                     "xls", "xla", "xlsx", "xltx", "doc", "dot", "docx", "dotx", "ppt", "pps", "ppa", "pptx", "potx", 
-                    "wasm"
+                    "wasm", "proto", "cer", "crt"
                 },
                 CompressFilesWithExtensions = new HashSet<string>(),
                 AllowFilePaths = new List<string>
@@ -303,6 +303,7 @@ namespace ServiceStack
         public string WebHostUrl { get; set; }
         public string WebHostPhysicalPath { get; set; }
         public string HandlerFactoryPath { get; set; }
+        public string PathBase { get; internal set; } // auto populated from HandlerFactoryPath
         public string DefaultRedirectPath { get; set; }
         public string MetadataRedirectPath { get; set; }
 

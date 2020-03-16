@@ -403,6 +403,7 @@ namespace ServiceStack.NativeTypes
                 metaType.EnumNames = new List<string>();
                 metaType.EnumValues = new List<string>();
                 metaType.EnumMemberValues = new List<string>();
+                var enumDescriptions = new List<string>();
 
                 var isDefaultLayout = true;
                 var isIntEnum = JsConfig.TreatEnumAsInteger || type.IsEnumFlags();
@@ -414,6 +415,8 @@ namespace ServiceStack.NativeTypes
                     metaType.EnumMemberValues.Add(name);
 
                     var enumMember = GetEnumMember(type, name);
+                    var enumDesc = enumMember.GetDescription();
+                    enumDescriptions.Add(enumDesc);
 
                     var value = enumMember.GetRawConstantValue();
                     var enumValue = Convert.ToInt64(value).ToString();
@@ -426,6 +429,9 @@ namespace ServiceStack.NativeTypes
                     if (enumValue != i.ToString())
                         isDefaultLayout = false;
                 }
+
+                if (enumDescriptions.Any(x => !string.IsNullOrEmpty(x)))
+                    metaType.EnumDescriptions = enumDescriptions;
 
                 if (!isIntEnum && isDefaultLayout)
                     metaType.EnumValues = null;
@@ -583,27 +589,17 @@ namespace ServiceStack.NativeTypes
                 //.OrderBy(x => x.GetParameters().Length)
                 .FirstOrDefault();
             var emptyCtor = attr.GetType().GetConstructor(Type.EmptyTypes);
-            var metaAttr = new MetadataAttribute {
+            var metaAttr = new MetadataAttribute
+            {
                 Name = attr.GetType().Name.Replace("Attribute", ""),
                 ConstructorArgs = firstCtor != null
                     ? firstCtor.GetParameters().ToList().ConvertAll(ToProperty)
                     : null,
             };
 
-            var ignoreDefaultValues = new Dictionary<string, object>();
-            try
-            {
-                var defaultAttr = attr.GetType().GetDefaultValue();
-                foreach (var pi in attr.GetType().GetPublicProperties())
-                {
-                    ignoreDefaultValues[pi.Name] = pi.GetValue(defaultAttr);
-                }
-            }
-            catch { }
-
             var attrProps = Properties(attr);
             metaAttr.Args = attrProps
-                .Select(x => ToProperty(x, attr, ignoreDefaultValues))
+                .Select(x => ToProperty(x, attr))
                 .Where(x => x.Value != null && x.ReadOnly != true).ToList();
 
             //Populate ctor Arg values from matching properties
@@ -1316,5 +1312,12 @@ namespace ServiceStack.NativeTypes
         }
 
         public static bool IsServiceStackType(this Type type) => type.Namespace?.StartsWith("ServiceStack") == true;
+
+        public static string GetEnumMemberValue(this MetadataType type, int i)
+        {
+            return type.EnumMemberValues != null && i < type.EnumMemberValues.Count
+                ? type.EnumMemberValues[i]
+                : null;
+        }
     }
 }

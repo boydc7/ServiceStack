@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Grpc.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using ProtoBuf;
@@ -20,6 +21,8 @@ using ServiceStack.Grpc;
 using ServiceStack.Host;
 using ServiceStack.Logging;
 using ServiceStack.NativeTypes;
+using ServiceStack.Text;
+using ServiceStack.Web;
 
 namespace ServiceStack
 {
@@ -40,7 +43,7 @@ namespace ServiceStack
     public class GrpcMarshallerFactory : MarshallerFactory
     {
         private static ILog log = LogManager.GetLogger(typeof(GrpcMarshallerFactory));
-        public static readonly GrpcMarshallerFactory Instance = new GrpcMarshallerFactory(GrpcUtils.TypeModel);
+        public static readonly GrpcMarshallerFactory Instance = new GrpcMarshallerFactory(GrpcConfig.TypeModel);
 
         public RuntimeTypeModel TypeModel { get; }
         private GrpcMarshallerFactory(RuntimeTypeModel typeModel) => TypeModel = typeModel;
@@ -87,20 +90,30 @@ namespace ServiceStack
         
         public Action<TypeBuilder, MethodBuilder, Type> GenerateServiceFilter { get; set; }
 
+        public Func<Type, string, bool> CreateDynamicService { get; set; } = GrpcConfig.HasDynamicAttribute;
+
+        public Func<IResponse, Status?> ToGrpcStatus { get; set; }
+
         /// <summary>
         /// Only generate specified Verb entries for "ANY" routes
         /// </summary>
-        public List<string> GenerateMethodsForAny { get; set; } = new List<string> {
+        public List<string> DefaultMethodsForAny { get; set; } = new List<string> {
             HttpMethods.Get,
             HttpMethods.Post,
             HttpMethods.Put,
             HttpMethods.Delete,
-            HttpMethods.Patch,
         };
         
-        public List<string> GenerateMethodsForAnyAutoQuery { get; set; } = new List<string> {
+        public List<string> AutoQueryMethodsForAny { get; set; } = new List<string> {
             HttpMethods.Get,
         };
+
+        public Func<Type, List<string>> GenerateMethodsForAny { get; }
+        
+        public List<string> DefaultGenerateMethodsForAny(Type requestType) =>
+            typeof(IQuery).IsAssignableFrom(requestType)
+                ? AutoQueryMethodsForAny
+                : DefaultMethodsForAny;
         
         public HashSet<string> IgnoreResponseHeaders { get; set; } = new HashSet<string> {
             HttpHeaders.Vary,
@@ -108,7 +121,6 @@ namespace ServiceStack
         };
         
         public List<Type> RegisterServices { get; set; } = new List<Type> {
-            typeof(GetFileService),
             typeof(StreamFileService),
             typeof(SubscribeServerEventsService),
         };
@@ -120,11 +132,19 @@ namespace ServiceStack
             get => IgnoreResponseHeaders == null;
             set => IgnoreResponseHeaders = null;
         }
+        
+        public bool DisableRequestParamsInHeaders { get; set; }
+        
+        public List<ProtoOptionDelegate> ProtoOptions { get; set; } = new List<ProtoOptionDelegate> {
+            ProtoOption.CSharpNamespace,
+            ProtoOption.PhpNamespace,
+        };
 
         private readonly IApplicationBuilder app;
         public GrpcFeature(IApplicationBuilder app)
         {
             this.app = app;
+            GenerateMethodsForAny = DefaultGenerateMethodsForAny;
         }
 
         public void Register(IAppHost appHost)
@@ -260,12 +280,12 @@ namespace ServiceStack
             return true;
         }
 
-        private void RegisterDtoTypes(IEnumerable<Type> allDtos)
+        private static void RegisterDtoTypes(IEnumerable<Type> allDtos)
         {
             // All DTO Types with inheritance need to be registered in GrpcMarshaller<T> / GrpcUtils.TypeModel
             foreach (var dto in allDtos)
             {
-                GrpcUtils.Register(dto);
+                GrpcConfig.Register(dto);
             }
         }
 
@@ -311,10 +331,11 @@ namespace ServiceStack
                         }
                         else
                         {
-                            if (typeof(IQuery).IsAssignableFrom(op.RequestType))
-                                methods.AddRange(GenerateMethodsForAnyAutoQuery);
-                            else
-                                methods.AddRange(GenerateMethodsForAny);
+                            var anyMethods = GenerateMethodsForAny(op.RequestType);
+                            if (!anyMethods.IsEmpty())
+                            {
+                                methods.AddRange(anyMethods);
+                            }
                         }
                     }
                     else
@@ -327,9 +348,10 @@ namespace ServiceStack
                 foreach (var action in genMethods)
                 {
                     var requestType = op.RequestType;
-                    var methodName = GrpcUtils.GetServiceName(action, requestType.Name);
+                    var methodName = GrpcConfig.GetServiceName(action, requestType.Name);
                     
                     var method = typeBuilder.DefineMethod(methodName, MethodAttributes.Public | MethodAttributes.Virtual,
+                        
                         CallingConventions.Standard,
                         returnType: typeof(Task<>).MakeGenericType(responseType),
                         parameterTypes: new[] { requestType, typeof(CallContext) });
@@ -349,6 +371,34 @@ namespace ServiceStack
                     il.Emit(OpCodes.Ldarg_2);
                     il.Emit(OpCodes.Callvirt, genericMi);
                     il.Emit(OpCodes.Ret);
+
+                    if (CreateDynamicService(requestType, action))
+                    {
+                        var dynamicMethodName = GrpcConfig.GetServiceName(action + Keywords.Dynamic, requestType.Name);
+                        
+                        method = typeBuilder.DefineMethod(dynamicMethodName, MethodAttributes.Public | MethodAttributes.Virtual,
+                        
+                            CallingConventions.Standard,
+                            returnType: typeof(Task<>).MakeGenericType(responseType),
+                            parameterTypes: new[] { typeof(DynamicRequest), typeof(CallContext) });
+
+                        GenerateServiceFilter?.Invoke(typeBuilder, method, requestType);
+
+                        il = method.GetILGenerator();
+
+                        mi = GrpcServicesBaseType.GetMethod("ExecuteDynamic", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    
+                        genericMi = mi.MakeGenericMethod(responseType);
+                    
+                        il.Emit(OpCodes.Nop);
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Ldstr, action);
+                        il.Emit(OpCodes.Ldarg_1);
+                        il.Emit(OpCodes.Ldarg_2);
+                        il.Emit(OpCodes.Ldtoken, requestType);
+                        il.Emit(OpCodes.Callvirt, genericMi);
+                        il.Emit(OpCodes.Ret);
+                    }
                 }
             }
 
@@ -357,7 +407,7 @@ namespace ServiceStack
                 var genericDef = streamService.GetTypeWithGenericTypeDefinitionOf(typeof(IStreamService<,>));
                 var requestType = genericDef.GenericTypeArguments[0];
                 var responseType = genericDef.GenericTypeArguments[1];
-                var methodName = requestType.Name;
+                var methodName = GrpcConfig.GetServerStreamServiceName(requestType.Name);
 
                 var method = typeBuilder.DefineMethod(methodName, MethodAttributes.Public | MethodAttributes.Virtual,
                     CallingConventions.Standard,
@@ -408,26 +458,7 @@ namespace ServiceStack
         }
     }
 
-    [DefaultRequest(typeof(GetFile))]
-    public class GetFileService : Service
-    {
-        public object Get(GetFile request)
-        {
-            var file = VirtualFileSources.GetFile(request.Path);
-            if (file == null)
-                throw HttpError.NotFound("File does not exist");
-
-            var bytes = file.GetBytesContentsAsBytes();
-            var to = new FileContent {
-                Name = file.Name,
-                Type = MimeTypes.GetMimeType(file.Extension),
-                Body = bytes,
-                Length = bytes.Length,
-            };
-            return to;
-        }
-    }
-
+    [Restrict(VisibilityTo = RequestAttributes.Grpc)]
     public class StreamFileService : Service, IStreamService<StreamFiles,FileContent>
     {
         public async IAsyncEnumerable<FileContent> Stream(StreamFiles request, CancellationToken cancel = default)
@@ -446,6 +477,7 @@ namespace ServiceStack
                         Length = bytes.Length,
                     }
                     : new FileContent {
+                        Name = paths[i],
                         ResponseStatus = new ResponseStatus {
                             ErrorCode = nameof(HttpStatusCode.NotFound),
                             Message = "File does not exist",
@@ -542,7 +574,7 @@ namespace ServiceStack
                     to.ProfileUrl = cmd.ProfileUrl;
                     to.IsAuthenticated = cmd.IsAuthenticated;
                     to.Channels = cmd.Channels;
-                    to.CreatedAt = cmd.CreatedAt;
+                    to.CreatedAt = cmd.CreatedAt.ToUnixTimeMs();
                 }
 
                 if (e is ServerEventConnect conn)

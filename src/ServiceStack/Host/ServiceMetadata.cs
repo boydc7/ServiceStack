@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Xml;
 using ServiceStack.Auth;
 using ServiceStack.DataAnnotations;
+using ServiceStack.FluentValidation;
 using ServiceStack.NativeTypes;
 using ServiceStack.NativeTypes.CSharp;
 using ServiceStack.Text;
@@ -492,9 +493,9 @@ namespace ServiceStack.Host
             var generator = new CSharpGenerator(typesConfig);
             types.Each(x =>
             {
-                x.DisplayType = x.DisplayType ?? generator.Type(x.Name, x.GenericArgs);
+                x.DisplayType ??= generator.Type(x.Name, x.GenericArgs);
                 x.Properties.Each(p =>
-                    p.DisplayType = p.DisplayType ?? generator.Type(p.Type, p.GenericArgs));
+                    p.DisplayType ??= generator.Type(p.Type, p.GenericArgs));
             });
 
             return types;
@@ -618,6 +619,7 @@ namespace ServiceStack.Host
         public List<string> RequiresAnyRole { get; set; }
         public List<string> RequiredPermissions { get; set; }
         public List<string> RequiresAnyPermission { get; set; }
+        public List<IValidationRule> RequestTypeValidationRules { get; set; }
     }
 
     public class OperationDto

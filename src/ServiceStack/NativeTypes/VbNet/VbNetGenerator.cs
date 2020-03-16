@@ -121,7 +121,7 @@ namespace ServiceStack.NativeTypes.VbNet
             var sb = new StringBuilderWrapper(sbInner);
             sb.AppendLine("' Options:");
             sb.AppendLine("'Date: {0}".Fmt(DateTime.Now.ToString("s").Replace("T", " ")));
-            sb.AppendLine("'Version: {0}".Fmt(Env.ServiceStackVersion));
+            sb.AppendLine("'Version: {0}".Fmt(Env.VersionString));
             sb.AppendLine("'Tip: {0}".Fmt(HelpMessages.NativeTypesDtoOptionsTip.Fmt("''")));
             sb.AppendLine("'BaseUrl: {0}".Fmt(Config.BaseUrl));
             sb.AppendLine("'");
@@ -311,7 +311,8 @@ namespace ServiceStack.NativeTypes.VbNet
                         if (KeyWords.Contains(name))
                             name = $"[{name}]";
                         
-                        if (type.EnumMemberValues != null && type.EnumMemberValues[i] != name)
+                        var memberValue = type.GetEnumMemberValue(i);
+                        if (memberValue != null)
                         {
                             AppendAttributes(sb, new List<MetadataAttribute> {
                                 new MetadataAttribute {
@@ -319,7 +320,7 @@ namespace ServiceStack.NativeTypes.VbNet
                                     Args = new List<MetadataPropertyType> {
                                         new MetadataPropertyType {
                                             Name = "Value",
-                                            Value = type.EnumMemberValues[i],
+                                            Value = memberValue,
                                             Type = "String",
                                         }
                                     }
@@ -371,7 +372,7 @@ namespace ServiceStack.NativeTypes.VbNet
 
                 sb = sb.Indent();
 
-                AddConstuctor(sb, type, options);
+                AddConstructor(sb, type, options);
                 AddProperties(sb, type,
                     includeResponseStatus: Config.AddResponseStatus && options.IsResponse
                         && type.Properties.Safe().All(x => x.Name != typeof(ResponseStatus).Name));
@@ -398,7 +399,7 @@ namespace ServiceStack.NativeTypes.VbNet
             return lastNS;
         }
 
-        private void AddConstuctor(StringBuilderWrapper sb, MetadataType type, CreateTypeOptions options)
+        private void AddConstructor(StringBuilderWrapper sb, MetadataType type, CreateTypeOptions options)
         {
             if (type.IsInterface())
                 return;

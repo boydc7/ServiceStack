@@ -65,7 +65,7 @@ namespace ServiceStack.Script
             EvaluateWhenSkippingFilterExecution.Each(name => context.OnlyEvaluateFiltersWhenSkippingPageFilterExecution.Add(name));
         }
 
-        // methods without arguments can be used in bindings, e.g. {{ now | dateFormat }}
+        // methods without arguments can be used in bindings, e.g. {{ now |> dateFormat }}
         public DateTime now() => DateTime.Now;
         public DateTime utcNow() => DateTime.UtcNow;
 
@@ -1292,7 +1292,6 @@ namespace ServiceStack.Script
 
             if (target is IEnumerable objs && !(target is IDictionary) && !(target is string))
             {
-
                 var i = 0;
                 foreach (var item in objs)
                 {
