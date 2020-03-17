@@ -64,6 +64,33 @@ namespace ServiceStack.Messaging
             }
         }
 
+        public async Task<int> ProcessQueueAsync(IMessageQueueClient mqClient, string queueName, Func<bool> doNext = null)
+        {
+            var msgsProcessed = 0;
+
+            try
+            {
+                IMessage<T> message;
+
+                while ((message = mqClient.GetAsync<T>(queueName)) != null)
+                {
+                    ProcessMessage(mqClient, message);
+
+                    msgsProcessed++;
+
+                    if (doNext != null && !doNext())
+                        return msgsProcessed;
+                }
+            }
+            catch (TaskCanceledException) {}
+            catch (Exception ex)
+            {
+                Log.Error("Error serializing message from mq server: " + ex.Message, ex);
+            }
+
+            return msgsProcessed;
+        }
+
         public int ProcessQueue(IMessageQueueClient mqClient, string queueName, Func<bool> doNext = null)
         {
             var msgsProcessed = 0;

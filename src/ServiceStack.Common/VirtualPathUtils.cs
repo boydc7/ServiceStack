@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using ServiceStack.IO;
 
 namespace ServiceStack
@@ -91,7 +92,14 @@ namespace ServiceStack
 
         public static TimeSpan MaxRetryOnExceptionTimeout { get; } = TimeSpan.FromSeconds(10);
 
-        internal static void SleepBackOffMultiplier(this int i)
+        public static async Task SleepBackOffMultiplierAsync(this int i)
+        {
+            var nextTryMs = (2 ^ i) * 50;
+
+            await Task.Delay(nextTryMs);
+        }
+
+        public static void SleepBackOffMultiplier(this int i)
         {
             var nextTryMs = (2 ^ i) * 50;
 #if NETSTANDARD2_1

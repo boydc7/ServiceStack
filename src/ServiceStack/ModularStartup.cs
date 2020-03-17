@@ -276,7 +276,7 @@ namespace ServiceStack
         public static List<object> PriorityZeroOrAbove(this List<Tuple<object, int>> instances) =>
             instances.Where(x => x.Item2 >= 0).OrderBy(x => x.Item2).Map(x => x.Item1);
 
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
         
         /// <summary>
         /// .NET Core 3.0 disables IStartup and multiple Configure* entry points on Startup class requiring the use of a
@@ -311,7 +311,7 @@ namespace ServiceStack
 #endif
     }
     
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
     /// <summary>
     /// .NET Core 3.0 disables IStartup and multiple Configure* entry points on Startup class requiring the use of a
     /// clean ModularStartupActivator adapter class for implementing https://docs.servicestack.net/modular-startup
