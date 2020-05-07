@@ -530,7 +530,7 @@ namespace ServiceStack
 
             if (Config.DebugMode)
             {
-#if !NETSTANDARD2_0
+#if !NETSTANDARD2_1
                 if (ex is HttpCompileException compileEx && compileEx.Results.Errors.HasErrors)
                 {
                     responseStatus.Errors ??= new List<ResponseError>();

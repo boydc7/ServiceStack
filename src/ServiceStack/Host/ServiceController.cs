@@ -558,7 +558,7 @@ namespace ServiceStack.Host
         public object ExecuteMessage(IMessage dto, IRequest req)
         {
             RequestContext.Instance.StartRequestContext();
-#if NETSTANDARD2_0
+#if NETSTANDARD2_1
             using var scope = req.StartScope();
 #endif
             

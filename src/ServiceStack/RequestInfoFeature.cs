@@ -1,4 +1,4 @@
-﻿#if NETSTANDARD2_0        
+﻿#if NETSTANDARD2_1
 using ServiceStack.Host;
 #else
 using System.Web;
