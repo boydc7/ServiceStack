@@ -2,9 +2,32 @@
 using System.Collections.Generic;
 using System.Linq;
 using Funq;
+using ServiceStack.Web;
 
 namespace ServiceStack
 {
+    
+#if NETSTANDARD2_0        
+    public interface IHasServiceScope : IServiceProvider
+    {
+        Microsoft.Extensions.DependencyInjection.IServiceScope ServiceScope { get; set; }
+    }
+
+    public static class ServiceScopeExtensions
+    {
+        public static Microsoft.Extensions.DependencyInjection.IServiceScope StartScope(this IRequest request)
+        {
+            if (request is IHasServiceScope hasScope)
+            {
+                var scope = request.CreateScope();
+                hasScope.ServiceScope = scope;
+                return scope;
+            }
+            return null;
+        }
+    }
+#endif
+    
     public static class ContainerTypeExtensions
     {
         /// <summary>

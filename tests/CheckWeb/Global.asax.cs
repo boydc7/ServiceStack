@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Runtime.Serialization;
 using System.Threading.Tasks;
+using System.Web;
 using Check.ServiceInterface;
 using Check.ServiceModel;
 using Check.ServiceModel.Operations;
@@ -33,6 +34,7 @@ using ServiceStack.Text;
 using ServiceStack.Validation;
 using ServiceStack.VirtualPath;
 using ServiceStack.Web;
+using ServiceStack.DataAnnotations;
 
 namespace CheckWeb
 {
@@ -43,6 +45,11 @@ namespace CheckWeb
         /// </summary>
         public AppHost()
             : base("CheckWeb", typeof(ErrorsService).Assembly, typeof(HtmlServices).Assembly) { }
+
+        // public override void HttpCookieFilter(HttpCookie cookie)
+        // {
+        //     cookie.SameSite = SameSiteMode.None;
+        // }
 
         /// <summary>
         /// Configure the Web Application host.
@@ -684,6 +691,10 @@ namespace CheckWeb
         public object Any(InProcRequest1 request) => "InProcRequest1 response";
         public object Any(InProcRequest2 request) => "InProcRequest2 response";
     }
+
+    [Alias("Rockstar")]
+    [NamedConnection("SqlServer")]
+    public class NamedRockstar : Rockstar { }
 
     public class Global : System.Web.HttpApplication
     {

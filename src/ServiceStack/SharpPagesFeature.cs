@@ -1,11 +1,13 @@
-﻿using System;
+﻿#if !NETSTANDARD2_0
+using System.Web;
+#endif
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Web;
 using System.Threading.Tasks;
 using ServiceStack.Auth;
 using ServiceStack.Caching;
@@ -47,8 +49,9 @@ namespace ServiceStack
         }
     }
     
-    public class SharpPagesFeature : ScriptContext, IPlugin, IViewEngine
+    public class SharpPagesFeature : ScriptContext, IPlugin, IViewEngine, Model.IHasStringId
     {
+        public string Id { get; set; } = ServiceStack.Plugins.SharpPages;
         public bool? EnableHotReload { get; set; }
 
         public bool DisablePageBasedRouting { get; set; }
@@ -139,7 +142,8 @@ namespace ServiceStack
                 appHost.RegisterService(typeof(SharpApiService), 
                     (ApiPath[0] == '/' ? ApiPath : '/' + ApiPath).CombineWith("/{PageName}/{PathInfo*}"));
 
-            if (DebugMode || MetadataDebugAdminRole != null)
+            var enableMetadataDebug = DebugMode || MetadataDebugAdminRole != null;
+            if (enableMetadataDebug)
             {
                 appHost.RegisterService(typeof(MetadataDebugService), MetadataDebugService.Route);
                 appHost.GetPlugin<MetadataFeature>().AddDebugLink(MetadataDebugService.Route, "Debug Inspector");
@@ -149,14 +153,29 @@ namespace ServiceStack
             {
                 appHost.RegisterService(typeof(ScriptAdminService), ScriptAdminService.Routes);
             }
+            
+            appHost.AddToAppMetadata(meta => {
+                meta.Plugins.SharpPages = new SharpPagesInfo {
+                    ApiPath = ApiPath,
+                    ScriptAdminRole = ScriptAdminRole,
+                    MetadataDebugAdminRole = MetadataDebugAdminRole,
+                    MetadataDebug = enableMetadataDebug,
+                };
+            });
 
+            Init();
+            
             InitPage = Pages.GetPage("_init");
+            if (InitPage == null)
+            {
+                var initScript = appHost.VirtualFileSources.GetFile("_init.ss");
+                if (initScript != null)
+                    InitPage = this.SharpScriptPage(initScript.ReadAllText());
+            }
             if (InitPage != null)
             {
                 appHost.AfterInitCallbacks.Add(host => RunInitPage());
             }
-
-            Init();
         }
 
         internal SharpPage InitPage { get; set; }
@@ -168,13 +187,18 @@ namespace ServiceStack
             
             try
             {
-                var execInit = new PageResult(InitPage).Result;
+                var pageResult = new PageResult(InitPage);
+                var execInit = pageResult.RenderToStringAsync().GetAwaiter().GetResult();
                 Args["initout"] = execInit;
+                if (pageResult.LastFilterError != null)
+                {
+                    Args["initError"] = pageResult.LastFilterError.ToString();
+                }
                 return execInit;
             }
             catch (Exception ex)
             {
-                Args["initout"] = ex.ToString();
+                Args["initError"] = Args["initout"] = ex.ToString();
                 return ex.ToString();
             }
         }
@@ -597,7 +621,7 @@ namespace ServiceStack
                 ? TypeConstants.EmptyStringArray
                 : request.PathInfo.SplitOnLast('.');
 
-            var hasPathContentType = parts.Length > 1 && Host.ContentTypes.KnownFormats.Contains(parts[1]);
+            var hasPathContentType = parts.Length > 1 && ContentTypes.KnownFormats.Contains(parts[1]);
             var pathInfo = hasPathContentType
                 ? parts[0]
                 : request.PathInfo;
@@ -607,7 +631,7 @@ namespace ServiceStack
                 : pathInfo.Split('/');
             
             parts = request.PageName.SplitOnLast('.');
-            var hasPageContentType = pathArgs.Length == 0 && parts.Length > 1 && Host.ContentTypes.KnownFormats.Contains(parts[1]);
+            var hasPageContentType = pathArgs.Length == 0 && parts.Length > 1 && ContentTypes.KnownFormats.Contains(parts[1]);
             var pageName = hasPageContentType
                 ? parts[0]
                 : request.PageName;
@@ -727,14 +751,8 @@ Plugins: {{ plugins | select: \n  - { it | typeName } }}
             if (string.IsNullOrEmpty(request.Script))
                 return null;
 
-            var feature = HostContext.GetPlugin<SharpPagesFeature>();
-            if (!HostContext.DebugMode)
-            {
-                if (HostContext.Config.AdminAuthSecret == null || HostContext.Config.AdminAuthSecret != request.AuthSecret)
-                {
-                    RequiredRoleAttribute.AssertRequiredRoles(Request, feature.MetadataDebugAdminRole);
-                }
-            }
+            var feature = HostContext.AssertPlugin<SharpPagesFeature>();
+            RequestUtils.AssertAccessRoleOrDebugMode(Request, accessRole: feature.MetadataDebugAdminRole, authSecret: request.AuthSecret);
 
             var appHost = HostContext.AppHost;
             var context = new ScriptContext
@@ -871,6 +889,8 @@ Plugins: {{ plugins | select: \n  - { it | typeName } }}
 
         public override async Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
         {
+            httpReq.UseBufferedStream = true;
+
             if (HostContext.ApplyCustomHandlerRequestFilters(httpReq, httpRes))
                 return;
 
@@ -878,7 +898,7 @@ Plugins: {{ plugins | select: \n  - { it | typeName } }}
             {
                 httpRes.StatusCode = (int) HttpStatusCode.Forbidden;
                 httpRes.StatusDescription = "Request Validation Failed";
-                httpRes.EndRequest();
+                await httpRes.EndRequestAsync();
                 return;
             }
             
@@ -978,6 +998,8 @@ Plugins: {{ plugins | select: \n  - { it | typeName } }}
 
         public override async Task ProcessRequestAsync(IRequest httpReq, IResponse httpRes, string operationName)
         {
+            httpReq.UseBufferedStream = true;
+
             if (HostContext.ApplyCustomHandlerRequestFilters(httpReq, httpRes))
                 return;
 

@@ -2,58 +2,147 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.FluentValidation;
 using ServiceStack.FluentValidation.Internal;
 using ServiceStack.FluentValidation.Resources;
 using ServiceStack.FluentValidation.Validators;
 using ServiceStack.Script;
-using ServiceStack.Text;
+using ServiceStack.Web;
 
 namespace ServiceStack
 {
-    public class ScriptConditionValidator : PropertyValidator, INotNullValidator
+    public class ScriptConditionValidator : PropertyValidator, IPredicateValidator
     {
-        private SharpPage Code { get; }
+        public SharpPage Code { get; }
         
         public ScriptConditionValidator(SharpPage code) : base(new LanguageStringSource(nameof(PredicateValidator)))
         {
             Code = code;
         }
-        
+
+        public override bool ShouldValidateAsynchronously(ValidationContext context) => true;
+        //public override bool ShouldValidateAsync(ValidationContext context) => true;
+
+        protected override async Task<bool> IsValidAsync(PropertyValidatorContext context, CancellationToken cancellation)
+        {
+            var ret = await HostContext.AppHost.EvalScriptAsync(context.ToPageResult(Code), context.ParentContext.Request);
+            return DefaultScripts.isTruthy(ret);
+        }
+
         protected override bool IsValid(PropertyValidatorContext context)
         {
             var ret = HostContext.AppHost.EvalScript(context.ToPageResult(Code), context.ParentContext.Request);
             return DefaultScripts.isTruthy(ret);
         }
     }
-    
+
     public static class Validators
     {
-        public static NullValidator Null { get; } = new NullValidator();
-        public static NotNullValidator NotNull { get; } = new NotNullValidator();
-        public static NotEmptyValidator NotEmpty { get; } = new NotEmptyValidator(null);
-        public static EmptyValidator Empty { get; } = new EmptyValidator(null);
+        public static Dictionary<Type, List<ITypeValidator>> TypeRulesMap { get; } =
+            new Dictionary<Type, List<ITypeValidator>>();
 
-        public static CreditCardValidator CreditCard { get; } = new CreditCardValidator();
-        public static EmailValidator Email { get; } = new EmailValidator();
-
-        public static Dictionary<Type, List<IValidationRule>> TypeRulesMap { get; } =
+        public static Dictionary<Type, List<IValidationRule>> TypePropertyRulesMap { get; } =
             new Dictionary<Type, List<IValidationRule>>();
 
         public static Dictionary<string, string> ConditionErrorCodes { get; } = new Dictionary<string, string>();
         public static Dictionary<string, string> ErrorCodeMessages { get; } = new Dictionary<string, string>();
 
+        //TODO FV9: ValidatorOptions.Global.CascadeMode;
         static readonly Func<CascadeMode> CascadeMode = () => ValidatorOptions.CascadeMode;
 
-        public static bool HasValidationAttributes(Type type) => type.HasAttribute<ValidateRequestAttribute>() ||
-            type.GetPublicProperties().FirstOrDefault(x => x.HasAttribute<ValidateAttribute>()) != null;
+        public static bool HasValidateRequestAttributes(Type type) => type.HasAttributeOf<ValidateRequestAttribute>();
+
+        public static bool HasValidateAttributes(Type type) => type.GetPublicProperties().Any(x => x.HasAttributeOf<ValidateRequestAttribute>());
+
+        public static async Task AssertTypeValidatorsAsync(IRequest req, object requestDto, Type requestType)
+        {
+            if (TypeRulesMap.TryGetValue(requestType, out var typeValidators))
+            {
+                foreach (var scriptValidator in typeValidators)
+                {
+                    await scriptValidator.ThrowIfNotValidAsync(requestDto, req);
+                }
+            }
+        }
+        
+        static void ThrowNoValidator(string validator) =>
+            throw new NotSupportedException(
+                $"Could not resolve matching '{validator}` Validator Script Method. " +
+                $"Ensure it's registered in AppHost.ScriptContext and called with correct number of arguments.");
+        static void ThrowInvalidValidator(string validator, string validatorType) =>
+            throw new NotSupportedException($"{validator} is not an `{validatorType}`");
+        static void ThrowInvalidValidate() =>
+            throw new NotSupportedException("[Validate] does not have a Validator or Condition");
+        static void ThrowInvalidValidateRequest() =>
+            throw new NotSupportedException("[ValidateRequest] does not have a Validator or Condition");
+
+        public static bool RegisterRequestRulesFor(Type type)
+        {
+            var requestAttrs = type.AllAttributes();
+            var to = new List<ITypeValidator>();
+
+            foreach (var attr in requestAttrs.OfType<ValidateRequestAttribute>())
+            {
+                AddTypeValidator(to, attr);
+            }
+
+            if (to.Count > 0)
+            {
+                TypeRulesMap[type] = to;
+                return true;
+            }
+            return false;
+        }
+
+        public static SharpPage ParseCondition(ScriptContext context, string condition)
+        {
+            var evalCode = ScriptCodeUtils.EnsureReturn(condition);
+            return context.CodeSharpPage(evalCode);
+        }
+
+        public static void AddTypeValidator(List<ITypeValidator> to, IValidateRule attr)
+        {
+            var appHost = HostContext.AppHost;
+            if (!string.IsNullOrEmpty(attr.Condition))
+            {
+                var code = ParseCondition(appHost.ScriptContext, attr.Condition);
+                to.Add(new ScriptValidator(code, attr.Condition).Init(attr));
+            }
+            else if (!string.IsNullOrEmpty(attr.Validator))
+            {
+                var ret = appHost.EvalExpression(attr
+                    .Validator); //Validators can't be cached due to custom code/msgs
+                if (ret == null)
+                    ThrowNoValidator(attr.Validator);
+
+                if (ret is ITypeValidator validator)
+                {
+                    to.Add(validator.Init(attr));
+                }
+                else if (ret is List<object> objs)
+                {
+                    foreach (var o in objs)
+                    {
+                        if (o is ITypeValidator itemValidator)
+                        {
+                            to.Add(itemValidator.Init(attr));
+                        }
+                        else ThrowInvalidValidator(attr.Validator, nameof(ITypeValidator));
+                    }
+                }
+                else ThrowInvalidValidator(attr.Validator, nameof(ITypeValidator));
+            }
+            else ThrowInvalidValidateRequest();
+        }
 
         /// <summary>
-        /// Register declarative [Validate] validators.
+        /// Register declarative property [Validate] attributes.
         /// </summary>
         /// <param name="type"></param>
         /// <returns></returns>
-        public static bool RegisterValidator(Type type)
+        public static bool RegisterPropertyRulesFor(Type type)
         {
             var typeRules = new List<IValidationRule>();
             foreach (var pi in type.GetPublicProperties())
@@ -76,14 +165,18 @@ namespace ServiceStack
 
             if (typeRules.Count > 0)
             {
-                TypeRulesMap[type] = typeRules;
+                TypePropertyRulesMap[type] = typeRules;
                 return true;
             }
 
             return false;
         }
 
-        public static List<IValidationRule> GetRules(Type type) => TypeRulesMap.TryGetValue(type, out var rules)
+        public static List<ITypeValidator> GetTypeRules(Type type) => TypeRulesMap.TryGetValue(type, out var rules)
+            ? rules
+            : TypeConstants<ITypeValidator>.EmptyList;
+
+        public static List<IValidationRule> GetPropertyRules(Type type) => TypePropertyRulesMap.TryGetValue(type, out var rules)
             ? rules
             : TypeConstants<IValidationRule>.EmptyList;
 
@@ -92,9 +185,9 @@ namespace ServiceStack
 
         public static void AddRule(Type type, PropertyInfo pi, ValidateAttribute attr)
         {
-            var typeRules = TypeRulesMap.TryGetValue(type, out var rules)
+            var typeRules = TypePropertyRulesMap.TryGetValue(type, out var rules)
                 ? rules
-                : TypeRulesMap[type] = new List<IValidationRule>();
+                : TypePropertyRulesMap[type] = new List<IValidationRule>();
 
             var rule = typeRules.FirstOrDefault(x => (x as PropertyRule)?.PropertyName == pi.Name);
             if (rule == null)
@@ -122,7 +215,7 @@ namespace ServiceStack
                 // Not/EmptyValidator has a required default constructor required to accurately determine empty for value types
                 if (pi.PropertyType.IsValueType && !pi.PropertyType.IsNullableType())
                 {
-                    rule.Validator += "(default('" + pi.PropertyType.Namespace + "." + pi.PropertyType.Name + "')";
+                    rule.Validator += "(default('" + pi.PropertyType.Namespace + "." + pi.PropertyType.Name + "'))";
                 }
             }
         }
@@ -153,13 +246,11 @@ namespace ServiceStack
 
                 if (!string.IsNullOrEmpty(propRule.Message))
                 {
-                    validator.Options.ErrorMessageSource =
-                        new StaticStringSource(appHost.ResolveLocalizedString(propRule.Message));
+                    validator.Options.ErrorMessageSource = new StaticStringSource(propRule.Message.Localize());
                 }
                 else if (errorCode != null && ErrorCodeMessages.TryGetValue(errorCode, out var errorMsg))
                 {
-                    validator.Options.ErrorMessageSource =
-                        new StaticStringSource(appHost.ResolveLocalizedString(errorMsg));
+                    validator.Options.ErrorMessageSource = new StaticStringSource(errorMsg.Localize());
                 }
 
                 return validator;
@@ -170,11 +261,7 @@ namespace ServiceStack
                 var ret = appHost.EvalExpression(propRule
                     .Validator); //Validators can't be cached due to custom code/msgs
                 if (ret == null)
-                {
-                    throw new NotSupportedException(
-                        $"Could not resolve matching '{propRule.Validator}` Validator Script Method. " +
-                        $"Ensure it's registered in AppHost.ScriptContext and called with correct number of arguments.");
-                }
+                    ThrowNoValidator(propRule.Validator);
 
                 if (ret is IPropertyValidator validator)
                 {
@@ -188,9 +275,10 @@ namespace ServiceStack
                         {
                             validators.Add(apply(itemValidator));
                         }
+                        else ThrowInvalidValidator(propRule.Validator, nameof(IPropertyValidator));
                     }
                 }
-                else throw new NotSupportedException($"{propRule.Validator} is not an IPropertyValidator");
+                else ThrowInvalidValidator(propRule.Validator, nameof(IPropertyValidator));
             }
             else if (!string.IsNullOrEmpty(propRule.Condition))
             {
@@ -198,6 +286,7 @@ namespace ServiceStack
                 var page = appHost.ScriptContext.CodeSharpPage(evalCode);
                 validators.Add(apply(new ScriptConditionValidator(page)));
             }
+            else ThrowInvalidValidate();
         }
 
         public static PageResult ToPageResult(this PropertyValidatorContext context, SharpPage page)

@@ -220,6 +220,18 @@ namespace ServiceStack.Script
                 Args[ScriptConstants.Request] = hasRequest;
         }
 
+        public PageResult AssignArgs(Dictionary<string, object> args)
+        {
+            if (args != null)
+            {
+                foreach (var entry in args)
+                {
+                    Args[entry.Key] = entry.Value;
+                }
+            }
+            return this;
+        }
+
         //entry point
         public async Task WriteToAsync(Stream responseStream, CancellationToken token = default)
         {
@@ -865,6 +877,8 @@ namespace ServiceStack.Script
                     LastFilterError = useEx;
                     LastFilterStackTrace = stackTrace.ToArray();
 
+                    Context.OnRenderException?.Invoke(this, ex);
+
                     if (RethrowExceptions)
                         throw useEx;
                     
@@ -978,7 +992,7 @@ namespace ServiceStack.Script
                     }
                     else
                     {
-                        sb.Append($"{argsTypesWithoutContext[0].ParameterType.Name} | {mi.Name}(");
+                        sb.Append($"{argsTypesWithoutContext[0].ParameterType.Name} |> {mi.Name}(");
                         var piCount = 0;
                         foreach (var pi in argsTypesWithoutContext.Skip(1))
                         {

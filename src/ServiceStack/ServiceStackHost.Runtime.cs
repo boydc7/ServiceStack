@@ -26,6 +26,7 @@ using ServiceStack.IO;
 using ServiceStack.Messaging;
 using ServiceStack.Metadata;
 using ServiceStack.MiniProfiler;
+using ServiceStack.Model;
 using ServiceStack.Redis;
 using ServiceStack.Serialization;
 using ServiceStack.Support.WebHost;
@@ -511,22 +512,100 @@ namespace ServiceStack
             return false;
         }
 
-        public virtual Exception ResolveResponseException(Exception ex)
+        public virtual ErrorResponse CreateErrorResponse(Exception ex, object request = null) =>
+            new ErrorResponse { ResponseStatus = ex.ToResponseStatus() };
+        
+        public virtual ResponseStatus CreateResponseStatus(Exception ex, object request=null)
         {
-            return Config?.ReturnsInnerException == true && ex.InnerException != null && !(ex is IHttpError)
+            var e = ((Config.ReturnsInnerException && ex.InnerException != null && !(ex is IHttpError)
                 ? ex.InnerException
-                : ex;
+                : null) ?? ex).UnwrapIfSingleException();
+            
+            var responseStatus = (e is IResponseStatusConvertible customStatus
+                ? customStatus.ToResponseStatus()
+                : null) ?? ResponseStatusUtils.CreateResponseStatus(e.GetType().Name, e.Message);
+            
+            if (responseStatus == null)
+                return null;
+
+            if (Config.DebugMode)
+            {
+#if !NETSTANDARD2_0
+                if (ex is HttpCompileException compileEx && compileEx.Results.Errors.HasErrors)
+                {
+                    responseStatus.Errors ??= new List<ResponseError>();
+                    foreach (var err in compileEx.Results.Errors)
+                    {
+                        responseStatus.Errors.Add(new ResponseError { Message = err.ToString() });
+                    }
+                }
+#endif
+                // View stack trace in tests and on the client
+                var sb = StringBuilderCache.Allocate();
+                
+                if (request != null)
+                {
+                    try
+                    {
+                        var str = $"[{request.GetType().GetOperationName()}: {DateTime.UtcNow}]:\n[REQUEST: {TypeSerializer.SerializeToString(request)}]";
+                        sb.AppendLine(str);
+                    }
+                    catch (Exception requestEx)
+                    {
+                        sb.AppendLine($"[{request.GetType().GetOperationName()}: {DateTime.UtcNow}]:\n[REQUEST: {requestEx.Message}]");
+                    }
+                }
+                
+                sb.AppendLine(e.ToString());
+                
+                var innerMessages = new List<string>();
+                var innerEx = e.InnerException;
+                while (innerEx != null)
+                {
+                    sb.AppendLine("");
+                    sb.AppendLine(innerEx.ToString());
+                    innerMessages.Add(innerEx.Message);
+                    innerEx = innerEx.InnerException;
+                }
+                
+                responseStatus.StackTrace = StringBuilderCache.ReturnAndFree(sb);
+                if (innerMessages.Count > 0)
+                {
+                    responseStatus.Meta ??= new Dictionary<string, string>();
+                    responseStatus.Meta["InnerMessages"] = innerMessages.Join("\n");
+                }
+            }
+
+            OnExceptionTypeFilter(e, responseStatus);
+
+            if (Config.DebugMode || Log.IsDebugEnabled)
+                OnLogError(GetType(), responseStatus.Message, e);
+            
+            return responseStatus;
         }
 
+        /// <summary>
+        /// Callback for handling when errors are logged, also called for non-Exception error logging like 404 requests   
+        /// </summary>
+        public virtual void OnLogError(Type type, string message, Exception innerEx=null)
+        {
+            if (innerEx != null)
+                Log.Error(message, innerEx);
+            else
+                Log.Error(message);
+        }
+        
         public virtual void OnExceptionTypeFilter(Exception ex, ResponseStatus responseStatus)
         {
             var argEx = ex as ArgumentException;
-            var isValidationSummaryEx = argEx is ValidationException;
-            if (argEx != null && !isValidationSummaryEx && argEx.ParamName != null)
+            if (argEx?.ParamName != null)
             {
                 var paramMsgIndex = argEx.Message.LastIndexOf("Parameter name:", StringComparison.Ordinal);
+                if (paramMsgIndex == -1)
+                    paramMsgIndex = argEx.Message.LastIndexOf("(Parameter", StringComparison.Ordinal); //.NET Core
+                
                 var errorMsg = paramMsgIndex > 0
-                    ? argEx.Message.Substring(0, paramMsgIndex)
+                    ? argEx.Message.Substring(0, paramMsgIndex).TrimEnd()
                     : argEx.Message;
 
                 if (responseStatus.Errors == null)
@@ -556,14 +635,6 @@ namespace ServiceStack
                         : $"Invalid Value for '{e.PropertyName}'"
                 }).ToList();
             }
-        }
-
-        public virtual void OnLogError(Type type, string message, Exception innerEx=null)
-        {
-            if (innerEx != null)
-                Log.Error(message, innerEx);
-            else
-                Log.Error(message);
         }
 
         public virtual void OnSaveSession(IRequest httpReq, IAuthSession session, TimeSpan? expiresIn = null)
@@ -809,6 +880,12 @@ namespace ServiceStack
 
             var utf8Bytes = html.ToUtf8Bytes();
             await outputStream.WriteAsync(utf8Bytes, 0, utf8Bytes.Length);
+        }
+
+        public virtual List<string> GetMetadataPluginIds()
+        {
+            var pluginIds = Plugins.OfType<IHasStringId>().Map(x => x.Id);
+            return pluginIds;
         }
     }
 

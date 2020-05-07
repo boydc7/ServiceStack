@@ -1,186 +1,52 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
 using Funq;
 using NUnit.Framework;
 using ServiceStack.Caching;
 using ServiceStack.Data;
 using ServiceStack.FluentValidation;
+using ServiceStack.Model;
+using ServiceStack.OrmLite;
+using ServiceStack.Script;
 using ServiceStack.Validation;
+using ServiceStack.Web;
 
 namespace ServiceStack.WebHost.Endpoints.Tests
 {
-    public class ValidateCreateRockstar 
-        : ICreateDb<RockstarAuto>, IReturn<RockstarWithIdResponse>
+    public class NoRockstarAlbumReferences : TypeValidator
     {
-        [Validate(nameof(ValidateScripts.NotNull))]
-        // [Validate("NotNull")]
-        public string FirstName { get; set; }
-        
-        //Added by Fluent Validator 
-        public string LastName { get; set; }
-        
-        // [Validate("[" + nameof(ValidateScripts.NotNull) + "," + nameof(ValidateScripts.Length) + "(13,100)]")] e.g. Typed
-        // [Validate("[NotNull,Length(13,100)]")]
-        [Validate("NotNull")]
-        [Validate("InclusiveBetween(13,100)")]
-        public int? Age { get; set; }
+        public NoRockstarAlbumReferences() 
+            : base("HasForeignKeyReferences", "Has RockstarAlbum References") {}
 
-        [Validate("NotEmpty(default('DateTime'))")]
-        //[Validate("NotEmpty")] equivalent to above thanks to: Validators.AppendDefaultValueOnEmptyValidators
-        public DateTime DateOfBirth { get; set; }
-        
-        public DateTime? DateDied { get; set; }
-        
-        public LivingStatus LivingStatus { get; set; }
-    }
-
-    public class ValidateCreateRockstarValidator : AbstractValidator<ValidateCreateRockstar>
-    {
-        public ValidateCreateRockstarValidator()
+        public override async Task<bool> IsValidAsync(object dto, IRequest request = null)
         {
-            RuleFor(x => x.LastName).NotNull();
+            //Example of dynamic access using compiled accessor delegates
+            //var id = TypeProperties.Get(dto.GetType()).GetPublicGetter("Id")(dto).ConvertTo<int>();
+            var id = ((IHasId<int>) dto).Id;
+            using var db = HostContext.AppHost.GetDbConnection(request);
+            return !(await db.ExistsAsync<RockstarAlbum>(x => x.RockstarId == id));
         }
     }
 
-    [AutoPopulate(nameof(LivingStatus), Value = LivingStatus.Alive)]
-    public class NoAbstractValidator 
-        : ICreateDb<RockstarAuto>, IReturn<RockstarWithIdResponse>
+    public class MyValidators : ScriptMethods
     {
-        [Validate("NotNull")]
-        public string FirstName { get; set; }
-        
-        [Validate("NotNull")]
-        public string LastName { get; set; }
-
-        [Validate("[NotNull,InclusiveBetween(13,100)]")]
-        public int? Age { get; set; }
-     
-        [Validate("NotEmpty")]
-        public DateTime DateOfBirth { get; set; }
-     
-        public LivingStatus LivingStatus { get; set; }
+        public ITypeValidator NoRockstarAlbumReferences() => new NoRockstarAlbumReferences();
     }
 
-    public class EmptyValidators 
-        : ICreateDb<RockstarAuto>, IReturn<RockstarWithIdResponse>
-    {
-        // [Validate("NotEmpty(0)")]
-        [Validate("NotEmpty")]
-        public int Int { get; set; }
-        [Validate("NotEmpty")]
-        public int? NInt { get; set; }
-        [Validate("NotEmpty")]
-        // [Validate("NotEmpty(default('System.TimeSpan'))")]
-        public TimeSpan TimeSpan { get; set; }
-        [Validate("NotEmpty")]
-        public TimeSpan? NTimeSpan { get; set; }
-        [Validate("NotEmpty")]
-        public string String { get; set; }
-        [Validate("NotEmpty")]
-        public int[] IntArray { get; set; }
-        [Validate("NotEmpty")]
-        public List<string> StringList { get; set; }
-    }
-
-    public class TriggerAllValidators 
-        : ICreateDb<RockstarAuto>, IReturn<RockstarWithIdResponse>
-    {
-        [Validate("CreditCard")]
-        public string CreditCard { get; set; }
-        [Validate("Email")]
-        public string Email { get; set; }
-        [Validate("Empty")]
-        public string Empty { get; set; }
-        [Validate("Equal('Equal')")]
-        public string Equal { get; set; }
-        [Validate("ExclusiveBetween(10, 20)")]
-        public int ExclusiveBetween { get; set; }
-        [Validate("GreaterThanOrEqual(10)")]
-        public int GreaterThanOrEqual { get; set; }
-        [Validate("GreaterThan(10)")]
-        public int GreaterThan { get; set; }
-        [Validate("InclusiveBetween(10, 20)")]
-        public int InclusiveBetween { get; set; }
-        [Validate("ExactLength(10)")]
-        public string Length { get; set; }
-        [Validate("LessThanOrEqual(10)")]
-        public int LessThanOrEqual { get; set; }
-        [Validate("LessThan(10)")]
-        public int LessThan { get; set; }
-        [Validate("NotEmpty")]
-        public string NotEmpty { get; set; }
-        [Validate("NotEqual('NotEqual')")]
-        public string NotEqual { get; set; }
-        [Validate("Null")]
-        public string Null { get; set; }
-        [Validate("RegularExpression('^[a-z]*$')")]
-        public string RegularExpression { get; set; }
-        [Validate("ScalePrecision(1,1)")]
-        public decimal ScalePrecision { get; set; }
-    }
-
-    public class DynamicValidationRules
-        : ICreateDb<RockstarAuto>, IReturn<RockstarWithIdResponse>
-    {
-        [Validate("NotNull")]
-        public string FirstName { get; set; }
-        
-        //[Validate("NotNull")] added in IValidationSource
-        public string LastName { get; set; }
-
-        // [Validate("[NotNull,InclusiveBetween(13,100)]")]
-        [Validate("NotNull")]
-        //[Validate("InclusiveBetween(13,100)")] added in IValidationSource
-        public int? Age { get; set; }
-     
-        [Validate("NotEmpty")]
-        public DateTime DateOfBirth { get; set; }
-     
-        public LivingStatus LivingStatus { get; set; }
-    }
-
-    public class CustomValidationErrors
-        : ICreateDb<RockstarAuto>, IReturn<RockstarWithIdResponse>
-    {
-        // Just overrides ErrorCode
-        [Validate("NotNull", ErrorCode = "ZERROR")]
-        public string CustomErrorCode { get; set; }
-        
-        // Overrides both ErrorCode & Message
-        [Validate("InclusiveBetween(1,2)", ErrorCode = "ZERROR", 
-            Message = "{PropertyName} has to be between {From} and {To}, you: {PropertyValue}")]
-        public int CustomErrorCodeAndMessage { get; set; }
-
-        // Overrides ErrorCode & uses Message from Validators
-        [Validate("NotNull", ErrorCode = "RuleMessage")]
-        public string ErrorCodeRule { get; set; }
-
-        // Overrides ErrorCode & uses Message from Validators
-        [Validate(Condition = ValidationConditions.IsOdd)]
-        public int IsOddCondition { get; set; }
-
-        // Combined typed conditions + Error code
-        [Validate(AllConditions = new[]{ ValidationConditions.IsOdd, ValidationConditions.IsOver2Digits }, ErrorCode = "RuleMessage")]
-        public int IsOddAndOverTwoDigitsCondition { get; set; }
-
-        // Combined typed conditions + unknown error code
-        [Validate(AnyConditions = new[]{ ValidationConditions.IsOdd, ValidationConditions.IsOver2Digits })]
-        public int IsOddOrOverTwoDigitsCondition { get; set; }
-    }
-
-    public static class ValidationConditions
-    {
-        public const string IsOdd = "it.isOdd()";
-        public const string IsOver2Digits = "it.log() > 2";
-    }
-    
     public partial class AutoQueryCrudTests
     {
         private bool UseDbSource = true;
         
         partial void OnConfigure(AutoQueryAppHost host, Container container)
         {
+            host.ScriptContext.ScriptMethods.AddRange(new ScriptMethods[] {
+                new DbScriptsAsync(),
+                new MyValidators(), 
+            });
+
             host.Plugins.Add(new ValidationFeature {
                 ConditionErrorCodes = {
                     [ValidationConditions.IsOdd] = "NotOdd",
@@ -203,9 +69,10 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             
             var validationSource = container.Resolve<IValidationSource>();
             validationSource.InitSchema();
-            validationSource.SaveValidationRules(new List<ValidateRule> {
-                new ValidateRule { Type = nameof(DynamicValidationRules), Field = nameof(DynamicValidationRules.LastName), Validator = "NotNull" },
-                new ValidateRule { Type = nameof(DynamicValidationRules), Field = nameof(DynamicValidationRules.Age), Validator = "InclusiveBetween(13,100)" },
+            validationSource.SaveValidationRulesAsync(new List<ValidationRule> {
+                new ValidationRule { Type = nameof(DynamicValidationRules), Validator = "IsAuthenticated" },
+                new ValidationRule { Type = nameof(DynamicValidationRules), Field = nameof(DynamicValidationRules.LastName), Validator = "NotNull" },
+                new ValidationRule { Type = nameof(DynamicValidationRules), Field = nameof(DynamicValidationRules.Age), Validator = "InclusiveBetween(13,100)" },
             });
         }
 
@@ -278,7 +145,23 @@ namespace ServiceStack.WebHost.Endpoints.Tests
         {
             try
             {
-                var response = client.Post(new DynamicValidationRules {
+                var anonClient = new JsonServiceClient(Config.ListeningOn);
+                var response = anonClient.Post(new DynamicValidationRules {
+                    DateOfBirth = new DateTime(2001,1,1),
+                });
+                
+                Assert.Fail("Should throw");
+            }
+            catch (WebServiceException ex)
+            {
+                Assert.That(ex.StatusCode, Is.EqualTo((int) HttpStatusCode.Unauthorized));
+                Assert.That(ex.ErrorCode, Is.EqualTo(nameof(HttpStatusCode.Unauthorized)));
+            }
+            
+            var authClient = CreateAuthClient();
+            try
+            {
+                var response = authClient.Post(new DynamicValidationRules {
                     DateOfBirth = new DateTime(2001,1,1),
                 });
                 
@@ -292,7 +175,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
 
             try
             {
-                var response = client.Post(new DynamicValidationRules {
+                var response = authClient.Post(new DynamicValidationRules {
                     FirstName = "A",
                     LastName = "B",
                     Age = 12,
@@ -309,7 +192,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 Assert.That(status.Errors.Count, Is.EqualTo(1));
             }
             
-            client.Post(new DynamicValidationRules {
+            authClient.Post(new DynamicValidationRules {
                 FirstName = "A",
                 LastName = "B",
                 Age = 13,
@@ -379,7 +262,7 @@ namespace ServiceStack.WebHost.Endpoints.Tests
             }
             catch (WebServiceException ex)
             {
-                ValidationExceptionTests.AssertTriggerValidators(ex);
+                ex.AssertTriggerValidators();
                 Console.WriteLine(ex);
             }
         }
@@ -456,6 +339,379 @@ namespace ServiceStack.WebHost.Endpoints.Tests
                 Assert.That(ex.ResponseStatus.Errors.Count, Is.EqualTo(typeof(CustomValidationErrors).GetProperties().Length - 1));
                 Assert.That(ex.ResponseStatus.Errors.All(x => x.FieldName != nameof(CustomValidationErrors.IsOddOrOverTwoDigitsCondition)));
             }
+        }
+
+        [Test]
+        public void Does_OnlyValidatesRequest()
+        {
+            try
+            {
+                var response = client.Post(new OnlyValidatesRequest {
+                });
+
+                Assert.Fail("Should throw");
+            }
+            catch (WebServiceException ex)
+            {
+                Assert.That(ex.StatusCode, Is.EqualTo(400));
+                Assert.That(ex.ErrorCode, Is.EqualTo("RuleMessage"));
+                Assert.That(ex.ErrorMessage, Is.EqualTo("ErrorCodeMessages for RuleMessage"));
+                Assert.That(ex.GetFieldErrors().Count, Is.EqualTo(0));
+            }
+            
+            try
+            {
+                var response = client.Post(new OnlyValidatesRequest {
+                    Test = 101
+                });
+
+                Assert.Fail("Should throw");
+            }
+            catch (WebServiceException ex)
+            {
+                Assert.That(ex.StatusCode, Is.EqualTo(401));
+                Assert.That(ex.ErrorCode, Is.EqualTo("AssertFailed2"));
+                Assert.That(ex.ErrorMessage, Is.EqualTo("2nd Assert Failed"));
+                Assert.That(ex.GetFieldErrors().Count, Is.EqualTo(0));
+            }
+            
+            try
+            {
+                var response = client.Post(new OnlyValidatesRequest {
+                    Test = 1001
+                });
+
+                Assert.Fail("Should throw");
+            }
+            catch (WebServiceException ex)
+            {
+                Assert.That(ex.StatusCode, Is.EqualTo(400));
+                Assert.That(ex.ErrorCode, Is.EqualTo("NotNull"));
+                Assert.That(ex.GetFieldErrors().Count, Is.EqualTo(1));
+            }
+        }
+
+        [Test]
+        public void Can_use_custom_Guid_Id_and_DateTimeOffset()
+        {
+            try
+            {
+                client.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "admin@email.com",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+                
+                var response = client.Post(new CreateBookmark {
+                    Description = "Description", 
+                    Slug = "Slug", 
+                    Title = "Title", 
+                    Url = "Url", 
+                });
+                
+                Assert.That(response.Id, Is.Not.EqualTo(new Guid()));
+                Assert.That(response.Result.Id, Is.EqualTo(response.Id));
+                Assert.That(response.Result.Description, Is.EqualTo("Description"));
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
+        }
+
+        [Test]
+        public void Does_validate_TestAuthValidators()
+        {
+            try
+            {
+                var anonClient = new JsonServiceClient(Config.ListeningOn);
+                anonClient.Post(new TestAuthValidators());
+                Assert.Fail("Should throw");
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(401));
+                Assert.That(e.ErrorCode, Is.EqualTo("Unauthorized"));
+                Assert.That(e.ErrorMessage, Is.EqualTo("Not Authenticated"));
+            }
+
+            try
+            {
+                var employeeClient = new JsonServiceClient(Config.ListeningOn);
+                
+                employeeClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "employee@email.com",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                employeeClient.Post(new TestAuthValidators());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(403));
+                Assert.That(e.ErrorCode, Is.EqualTo("Forbidden"));
+                Assert.That(e.ErrorMessage, Is.EqualTo("Manager Role Required"));
+            }
+
+            try
+            {
+                var managerClient = new JsonServiceClient(Config.ListeningOn);
+                
+                managerClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "manager",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                managerClient.Post(new TestAuthValidators());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull"));
+            }
+
+            try
+            {
+                var adminClient = new JsonServiceClient(Config.ListeningOn);
+                
+                adminClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "admin@email.com",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                adminClient.Post(new TestAuthValidators());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull"));
+            }
+        }
+        
+
+        [Test]
+        public void Does_validate_TestMultiAuthValidators()
+        {
+            try
+            {
+                var anonClient = new JsonServiceClient(Config.ListeningOn);
+                anonClient.Post(new TestMultiAuthValidators());
+                Assert.Fail("Should throw");
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(401));
+                Assert.That(e.ErrorCode, Is.EqualTo("Unauthorized"));
+                Assert.That(e.ErrorMessage, Is.EqualTo("Not Authenticated"));
+            }
+
+            try
+            {
+                var employeeClient = new JsonServiceClient(Config.ListeningOn);
+                
+                employeeClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "employee@email.com",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                employeeClient.Post(new TestMultiAuthValidators());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(403));
+                Assert.That(e.ErrorCode, Is.EqualTo("Forbidden"));
+                Assert.That(e.ErrorMessage, Is.EqualTo("Manager Role Required"));
+            }
+
+            try
+            {
+                var managerClient = new JsonServiceClient(Config.ListeningOn);
+                
+                managerClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "manager",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                managerClient.Post(new TestMultiAuthValidators());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull"));
+            }
+
+            try
+            {
+                var adminClient = new JsonServiceClient(Config.ListeningOn);
+                
+                adminClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "admin@email.com",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                adminClient.Post(new TestMultiAuthValidators());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull"));
+            }
+        }
+
+        [Test]
+        public void Does_validate_TestIsAdmin()
+        {
+            var userNames = new[] { "employee@email.com", "manager" };
+            foreach (var userName in userNames)
+            {
+                var userClient = new JsonServiceClient(Config.ListeningOn);
+                if (userName != null)
+                {
+                    try
+                    {
+                        var managerClient = new JsonServiceClient(Config.ListeningOn);
+                
+                        managerClient.Post(new Authenticate {
+                            provider = "credentials",
+                            UserName = "manager",
+                            Password = "p@55wOrd",
+                            RememberMe = true,
+                        });
+
+                        managerClient.Post(new TestIsAdmin());
+                    }
+                    catch (WebServiceException e)
+                    {
+                        Assert.That(e.StatusCode, Is.EqualTo(403));
+                        Assert.That(e.ErrorCode, Is.EqualTo("Forbidden"));
+                        Assert.That(e.ErrorMessage, Is.EqualTo("Admin Role Required"));
+                    }
+                }
+            }
+
+            try
+            {
+                var adminClient = new JsonServiceClient(Config.ListeningOn);
+                
+                adminClient.Post(new Authenticate {
+                    provider = "credentials",
+                    UserName = "admin@email.com",
+                    Password = "p@55wOrd",
+                    RememberMe = true,
+                });
+
+                adminClient.Post(new TestIsAdmin());
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull"));
+            }
+        }
+
+        [Test]
+        public void Does_validate_TestDbCondition()
+        {
+            using var db = appHost.Resolve<IDbConnectionFactory>().OpenDbConnection();
+            db.DropAndCreateTable<RockstarAlbum>();
+            
+            try
+            {
+                db.Insert(new RockstarAlbum { Id = 1, Name = "An Album", Genre = "Pop", RockstarId = 1 });
+                var response = client.Post(new TestDbCondition {
+                    Id = 1,
+                });
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("HasForeignKeyReferences"));
+            }
+            
+            try
+            {
+                db.Delete<RockstarAlbum>(x => x.RockstarId == 1);
+                var response = client.Post(new TestDbCondition {
+                    Id = 1,
+                });
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull")); //success!
+            }
+        }
+
+        [Test]
+        public void Does_validate_TestDbValidator()
+        {
+            using var db = appHost.Resolve<IDbConnectionFactory>().OpenDbConnection();
+            db.DropAndCreateTable<RockstarAlbum>();
+            
+            try
+            {
+                db.Insert(new RockstarAlbum { Id = 1, Name = "An Album", Genre = "Pop", RockstarId = 1 });
+                var response = client.Post(new TestDbValidator {
+                    Id = 1,
+                });
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("HasForeignKeyReferences"));
+            }
+            
+            try
+            {
+                db.Delete<RockstarAlbum>(x => x.RockstarId == 1);
+                var response = client.Post(new TestDbValidator {
+                    Id = 1,
+                });
+            }
+            catch (WebServiceException e)
+            {
+                Assert.That(e.StatusCode, Is.EqualTo(400));
+                Assert.That(e.ErrorCode, Is.EqualTo("NotNull")); //success!
+            }
+        }
+    }
+
+    public static class ValidationUtils
+    {
+        public static void AssertTriggerValidators(this WebServiceException ex)
+        {
+            var errors = ex.ResponseStatus.Errors;
+            Assert.That(errors.First(x => x.FieldName == "CreditCard").ErrorCode, Is.EqualTo("CreditCard"));
+            Assert.That(errors.First(x => x.FieldName == "Email").ErrorCode, Is.EqualTo("Email"));
+            Assert.That(errors.First(x => x.FieldName == "Email").ErrorCode, Is.EqualTo("Email"));
+            Assert.That(errors.First(x => x.FieldName == "Empty").ErrorCode, Is.EqualTo("Empty"));
+            Assert.That(errors.First(x => x.FieldName == "Equal").ErrorCode, Is.EqualTo("Equal"));
+            Assert.That(errors.First(x => x.FieldName == "ExclusiveBetween").ErrorCode, Is.EqualTo("ExclusiveBetween"));
+            Assert.That(errors.First(x => x.FieldName == "GreaterThan").ErrorCode, Is.EqualTo("GreaterThan"));
+            Assert.That(errors.First(x => x.FieldName == "GreaterThanOrEqual").ErrorCode, Is.EqualTo("GreaterThanOrEqual"));
+            Assert.That(errors.First(x => x.FieldName == "InclusiveBetween").ErrorCode, Is.EqualTo("InclusiveBetween"));
+            Assert.That(errors.First(x => x.FieldName == "Length").ErrorCode, Is.EqualTo("Length"));
+            Assert.That(errors.First(x => x.FieldName == "LessThan").ErrorCode, Is.EqualTo("LessThan"));
+            Assert.That(errors.First(x => x.FieldName == "LessThanOrEqual").ErrorCode, Is.EqualTo("LessThanOrEqual"));
+            Assert.That(errors.First(x => x.FieldName == "NotEmpty").ErrorCode, Is.EqualTo("NotEmpty"));
+            Assert.That(errors.First(x => x.FieldName == "NotEqual").ErrorCode, Is.EqualTo("NotEqual"));
+            Assert.That(errors.First(x => x.FieldName == "Null").ErrorCode, Is.EqualTo("Null"));
+            Assert.That(errors.First(x => x.FieldName == "RegularExpression").ErrorCode, Is.EqualTo("RegularExpression"));
+            Assert.That(errors.First(x => x.FieldName == "ScalePrecision").ErrorCode, Is.EqualTo("ScalePrecision"));
         }
     }
 }

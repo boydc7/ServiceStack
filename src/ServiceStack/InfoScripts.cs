@@ -42,6 +42,7 @@ namespace ServiceStack
         public IDictionary envVariables() => Environment.GetEnvironmentVariables();
         public OperatingSystem envOSVersion() => Environment.OSVersion;
         public string envCommandLine() => Environment.CommandLine;
+        public string[] envCommandLineArgs() => Environment.GetCommandLineArgs();
         public string envMachineName() => Environment.MachineName;
         public string envSystemDirectory() => Environment.SystemDirectory;
         public string envUserDomainName() => Environment.UserDomainName;
@@ -61,7 +62,7 @@ namespace ServiceStack
         public List<IPAddress> networkIpv4Addresses() => IPAddressExtensions.GetAllNetworkInterfaceIpv4Addresses().Keys.ToList();
         public List<IPAddress> networkIpv6Addresses() => IPAddressExtensions.GetAllNetworkInterfaceIpv6Addresses();
 
-        private IHttpRequest req(ScriptScopeContext scope) => scope.GetValue("Request") as IHttpRequest;
+        private IRequest req(ScriptScopeContext scope) => scope.GetValue(ScriptConstants.Request) as IRequest;
 
         public IAuthSession userSession(ScriptScopeContext scope) => req(scope).GetSession();
         public string userSessionId(ScriptScopeContext scope) => req(scope).GetSessionId();

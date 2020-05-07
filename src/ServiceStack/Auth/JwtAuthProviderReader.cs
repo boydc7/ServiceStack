@@ -17,6 +17,7 @@ namespace ServiceStack.Auth
     /// </summary>
     public class JwtAuthProviderReader : AuthProvider, IAuthWithRequest, IAuthPlugin
     {
+        public override string Type => "Bearer";
         public static RsaKeyLengths UseRsaKeyLength = RsaKeyLengths.Bit2048;
 
         public const string Name = AuthenticateService.JwtProvider;
@@ -24,7 +25,7 @@ namespace ServiceStack.Auth
 
         public static readonly HashSet<string> IgnoreForOperationTypes = new HashSet<string>
         {
-            typeof(StaticFileHandler).Name,
+            nameof(StaticFileHandler),
         };
 
         /// <summary>
@@ -32,9 +33,18 @@ namespace ServiceStack.Auth
         /// </summary>
         public static readonly Dictionary<string, Func<byte[], byte[], byte[]>> HmacAlgorithms = new Dictionary<string, Func<byte[], byte[], byte[]>>
         {
-            { "HS256", (key, value) => { using (var sha = new HMACSHA256(key)) { return sha.ComputeHash(value); } } },
-            { "HS384", (key, value) => { using (var sha = new HMACSHA384(key)) { return sha.ComputeHash(value); } } },
-            { "HS512", (key, value) => { using (var sha = new HMACSHA512(key)) { return sha.ComputeHash(value); } } }
+            { "HS256", (key, value) => {
+                using var sha = new HMACSHA256(key);
+                return sha.ComputeHash(value);
+            } },
+            { "HS384", (key, value) => {
+                using var sha = new HMACSHA384(key);
+                return sha.ComputeHash(value);
+            } },
+            { "HS512", (key, value) => {
+                using var sha = new HMACSHA512(key);
+                return sha.ComputeHash(value);
+            } }
         };
 
         /// <summary>
@@ -480,7 +490,7 @@ namespace ServiceStack.Auth
                 {
                     if (RemoveInvalidTokenCookie && req.Cookies.ContainsKey(Keywords.TokenCookie))
                     {
-                        (req.Response as IHttpResponse)?.Cookies.DeleteCookie(Keywords.TokenCookie);
+                        (res as IHttpResponse)?.Cookies.DeleteCookie(Keywords.TokenCookie);
                     }
 
                     throw;
@@ -497,7 +507,7 @@ namespace ServiceStack.Auth
         /// <summary>
         /// Return token payload which is both verified and still valid
         /// </summary>
-        public JsonObject GetValidJwtPayload(IRequest req, string jwt)
+        public virtual JsonObject GetValidJwtPayload(IRequest req, string jwt)
         {
             var verifiedPayload = GetVerifiedJwtPayload(req, jwt.Split('.'));
             var invalidError = GetInvalidJwtPayloadError(verifiedPayload);
@@ -509,7 +519,7 @@ namespace ServiceStack.Auth
         /// <summary>
         /// Return token payload which has been verified to be created using the configured encryption key.
         /// </summary>
-        public JsonObject GetVerifiedJwtPayload(IRequest req, string[] parts)
+        public virtual JsonObject GetVerifiedJwtPayload(IRequest req, string[] parts)
         {
             if (parts.Length == 3)
             {
@@ -545,7 +555,7 @@ namespace ServiceStack.Auth
             throw new ArgumentException(ErrorMessages.TokenInvalid.Localize(req));
         }
 
-        public JsonObject GetVerifiedJwePayload(IRequest req, string[] parts)
+        public virtual JsonObject GetVerifiedJwePayload(IRequest req, string[] parts)
         {
             if (!VerifyJwePayload(req, parts, out var iv, out var cipherText, out var cryptKey))
                 return null;
@@ -565,7 +575,7 @@ namespace ServiceStack.Auth
             }
         }
 
-        public bool VerifyJwePayload(IRequest req, string[] parts, out byte[] iv, out byte[] cipherText, out byte[] cryptKey)
+        public virtual bool VerifyJwePayload(IRequest req, string[] parts, out byte[] iv, out byte[] cipherText, out byte[] cryptKey)
         {
             var jweHeaderBase64Url = parts[0];
             var jweEncKeyBase64Url = parts[1];
@@ -620,7 +630,7 @@ namespace ServiceStack.Auth
             return false;
         }
 
-        public IAuthSession ConvertJwtToSession(IRequest req, string jwt)
+        public virtual IAuthSession ConvertJwtToSession(IRequest req, string jwt)
         {
             if (jwt == null)
                 throw new ArgumentNullException(nameof(jwt));
@@ -639,7 +649,7 @@ namespace ServiceStack.Auth
             return session;
         }
 
-        public IAuthSession CreateSessionFromPayload(IRequest req, JsonObject jwtPayload)
+        public virtual IAuthSession CreateSessionFromPayload(IRequest req, JsonObject jwtPayload)
         {
             AssertJwtPayloadIsValid(jwtPayload);
 
@@ -703,7 +713,7 @@ namespace ServiceStack.Auth
             return null;
         }
 
-        public bool VerifyPayload(IRequest req, string algorithm, byte[] bytesToSign, byte[] sentSignatureBytes)
+        public virtual bool VerifyPayload(IRequest req, string algorithm, byte[] bytesToSign, byte[] sentSignatureBytes)
         {
             var isHmac = HmacAlgorithms.ContainsKey(algorithm);
             var isRsa = RsaSignAlgorithms.ContainsKey(algorithm);
@@ -768,20 +778,14 @@ namespace ServiceStack.Auth
                 throw new NotSupportedException("Invalid algorithm: " + HashAlgorithm);
 
             if (isHmac && AuthKey == null)
-                throw new ArgumentNullException(nameof(AuthKey), "An AuthKey is Required to use JWT, e.g: new JwtAuthProvider { AuthKey = AesUtils.CreateKey() }");
+                throw new ArgumentNullException(nameof(AuthKey), @"An AuthKey is Required to use JWT, e.g: new JwtAuthProvider { AuthKey = AesUtils.CreateKey() }");
             if (isRsa && PrivateKey == null && PublicKey == null)
-                throw new ArgumentNullException(nameof(PrivateKey), "PrivateKey is Required to use JWT with " + HashAlgorithm);
+                throw new ArgumentNullException(nameof(PrivateKey), @"PrivateKey is Required to use JWT with " + HashAlgorithm);
 
             if (KeyId == null)
                 KeyId = GetKeyId(null);
-                
-            if (ServiceRoutes != null) 
-            {
-                foreach (var registerService in ServiceRoutes)
-                {
-                    appHost.RegisterService(registerService.Key, registerService.Value);
-                }
-            }
+             
+            appHost.RegisterServices(ServiceRoutes);
 
             feature.AuthResponseDecorator = AuthenticateResponseDecorator;
         }

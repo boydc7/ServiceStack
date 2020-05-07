@@ -61,6 +61,15 @@ namespace ServiceStack
         public bool TestMode { get; set; }
 
         /// <summary>
+        /// The base path ServiceStack is hosted on
+        /// </summary>
+        public virtual string PathBase
+        {
+            get => Config?.HandlerFactoryPath;
+            set => Config.HandlerFactoryPath = value;
+        }
+
+        /// <summary>
         /// The assemblies reflected to find api services.
         /// These can be provided in the constructor call.
         /// </summary>
@@ -115,6 +124,8 @@ namespace ServiceStack
             ServiceExceptionHandlersAsync = new List<HandleServiceExceptionAsyncDelegate>();
             UncaughtExceptionHandlers = new List<HandleUncaughtExceptionDelegate>();
             UncaughtExceptionHandlersAsync = new List<HandleUncaughtExceptionAsyncDelegate>();
+            GatewayExceptionHandlers = new List<HandleGatewayExceptionDelegate>();
+            GatewayExceptionHandlersAsync = new List<HandleGatewayExceptionAsyncDelegate>();
             BeforeConfigure = new List<Action<ServiceStackHost>>();
             AfterConfigure = new List<Action<ServiceStackHost>>();
             AfterInitCallbacks = new List<Action<IAppHost>>();
@@ -164,10 +175,13 @@ namespace ServiceStack
                 typeof(MetadataDebugService),
                 typeof(ServerEventsSubscribersService),
                 typeof(ServerEventsUnRegisterService),
+                typeof(MetadataAppService),
                 typeof(MetadataNavService),
                 typeof(ScriptAdminService),
                 typeof(RequestLogsService),
                 typeof(AutoQueryMetadataService),
+                typeof(Validation.GetValidationRulesService),
+                typeof(Validation.ModifyValidationRulesService),
             };
 
             JsConfig.InitStatics();
@@ -521,6 +535,9 @@ namespace ServiceStack
 
         public List<HandleUncaughtExceptionAsyncDelegate> UncaughtExceptionHandlersAsync { get; set; }
 
+        public List<HandleGatewayExceptionDelegate> GatewayExceptionHandlers { get; set; }
+        public List<HandleGatewayExceptionAsyncDelegate> GatewayExceptionHandlersAsync { get; set; }
+
         public List<Action<ServiceStackHost>> BeforeConfigure { get; set; }
 
         public List<Action<ServiceStackHost>> AfterConfigure { get; set; }
@@ -614,21 +631,8 @@ namespace ServiceStack
         /// </summary>
         public virtual object EvalScriptValue(IScriptValue scriptValue, IRequest req = null, Dictionary<string, object> args=null)
         {
-            if (scriptValue == null)
-                throw new ArgumentNullException(nameof(scriptValue));
-
-            if (scriptValue.Value != null)
-                return scriptValue.Value;
-
-            if (scriptValue.Expression != null)
-            {
-                return !scriptValue.NoCache
-                    ? EvalExpressionCached(scriptValue.Expression)
-                    : JS.eval(scriptValue.Expression);
-            }
-
-            if (scriptValue.Eval == null)
-                return null;
+            if (ResolveScriptValue(scriptValue, out var exprValue)) 
+                return exprValue;
 
             var evalCode = ScriptCodeUtils.EnsureReturn(scriptValue.Eval);
 
@@ -639,18 +643,68 @@ namespace ServiceStack
                 return value;
 
             // Cache AST Globally
-            var evalAstCacheKey = JS.EvalAstCacheKeyPrefix + evalCode;
-            var cachedCodePage = (SharpPage)ScriptContext.Cache.GetOrAdd(evalAstCacheKey, key =>
-                ScriptContext.CodeSharpPage(evalCode));
+            var cachedCodePage = JS.scriptCached(ScriptContext, evalCode);
             
-            value = EvalScript(new PageResult(cachedCodePage), req, args);
+            var evalCodeValue = EvalScript(new PageResult(cachedCodePage), req, args);
             if (!scriptValue.NoCache && req != null)
-                req.Items[evalCacheKey] = value;
+                req.Items[evalCacheKey] = evalCodeValue;
 
-            return value;
+            return evalCodeValue;
         }
 
-        public virtual object EvalScript(PageResult pageResult, IRequest req = null, Dictionary<string, object> args=null)
+        /// <summary>
+        /// Evaluate a script value, `IScriptValue.Expression` results are cached globally.
+        /// If `IRequest` is provided, results from the same `IScriptValue.Eval` are cached per request. 
+        /// </summary>
+        public virtual async Task<object> EvalScriptValueAsync(IScriptValue scriptValue, IRequest req = null, Dictionary<string, object> args=null)
+        {
+            if (ResolveScriptValue(scriptValue, out var exprValue)) 
+                return exprValue;
+
+            var evalCode = ScriptCodeUtils.EnsureReturn(scriptValue.Eval);
+
+            object value = null;
+            var evalCacheKey = JS.EvalCacheKeyPrefix + evalCode;
+
+            if (!scriptValue.NoCache && req?.Items.TryGetValue(evalCacheKey, out value) == true)
+                return value;
+
+            // Cache AST Globally
+            var cachedCodePage = JS.scriptCached(ScriptContext, evalCode);
+            
+            var evalCodeValue = await EvalScriptAsync(new PageResult(cachedCodePage), req, args);
+            if (!scriptValue.NoCache && req != null)
+                req.Items[evalCacheKey] = evalCodeValue;
+
+            return evalCodeValue;
+        }
+
+        private bool ResolveScriptValue(IScriptValue scriptValue, out object exprValue)
+        {
+            if (scriptValue == null)
+                throw new ArgumentNullException(nameof(scriptValue));
+
+            if (scriptValue.Value != null)
+            {
+                exprValue = scriptValue.Value;
+                return true;
+            }
+
+            if (scriptValue.Expression != null)
+            {
+                {
+                    exprValue = !scriptValue.NoCache
+                        ? EvalExpressionCached(scriptValue.Expression)
+                        : JS.eval(scriptValue.Expression);
+                    return true;
+                }
+            }
+
+            exprValue = null;
+            return scriptValue.Eval == null;
+        }
+
+        private static void InitPageResult(PageResult pageResult, IRequest req, Dictionary<string, object> args)
         {
             if (args != null)
             {
@@ -665,11 +719,27 @@ namespace ServiceStack
                 pageResult.Args[ScriptConstants.Request] = req;
                 pageResult.Args[ScriptConstants.Dto] = req.Dto;
             }
+        }
+
+        public virtual object EvalScript(PageResult pageResult, IRequest req = null, Dictionary<string, object> args=null)
+        {
+            InitPageResult(pageResult, req, args);
 
             if (!pageResult.EvaluateResult(out var returnValue))
                 ScriptContextUtils.ThrowNoReturn();
 
             return ScriptLanguage.UnwrapValue(returnValue);
+        }
+
+        public virtual async Task<object> EvalScriptAsync(PageResult pageResult, IRequest req = null, Dictionary<string, object> args=null)
+        {
+            InitPageResult(pageResult, req, args);
+
+            var ret = await pageResult.EvaluateResultAsync();
+            if (!ret.Item1)
+                ScriptContextUtils.ThrowNoReturn();
+
+            return ScriptLanguage.UnwrapValue(ret.Item2);
         }
 
         /// <summary>
@@ -686,6 +756,24 @@ namespace ServiceStack
         public virtual object OnPostExecuteServiceFilter(IService service, object response, IRequest httpReq, IResponse httpRes)
         {
             return response;
+        }
+
+        /// <summary>
+        /// Occurs when the Service throws an Service Gateway Exception
+        /// </summary>
+        public virtual async Task OnGatewayException(IRequest httpReq, object request, Exception ex)
+        {
+            httpReq.Items[nameof(OnGatewayException)] = bool.TrueString;
+
+            foreach (var errorHandler in GatewayExceptionHandlers)
+            {
+                errorHandler(httpReq, request, ex);
+            }
+
+            foreach (var errorHandler in GatewayExceptionHandlersAsync)
+            {
+                await errorHandler(httpReq, request, ex);
+            }
         }
 
         /// <summary>
@@ -756,7 +844,7 @@ namespace ServiceStack
             {
                 if (response == null)
                 {
-                    res.EndRequest();
+                    await res.EndRequestAsync();
                 }
             }
         }
@@ -1388,6 +1476,7 @@ namespace ServiceStack
                     Container = null;
                 }
 
+                AuthenticateService.Reset();
                 JS.UnConfigure();
                 JsConfig.Reset(); //Clears Runtime Attributes
 

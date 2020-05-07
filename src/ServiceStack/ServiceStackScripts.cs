@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -41,8 +42,8 @@ namespace ServiceStack
         public FileSystemVirtualFiles hostVfsFileSystem() => HostContext.FileSystemVirtualFiles;
         public GistVirtualFiles hostVfsGist() => HostContext.GistVirtualFiles;
 
-        public IHttpRequest httpRequest(ScriptScopeContext scope) => req(scope);
-        internal IHttpRequest req(ScriptScopeContext scope) => scope.GetValue(ScriptConstants.Request) as IHttpRequest;
+        public IHttpRequest httpRequest(ScriptScopeContext scope) => req(scope) as IHttpRequest;
+        internal IRequest req(ScriptScopeContext scope) => scope.GetValue(ScriptConstants.Request) as IRequest;
 
         public object requestItem(ScriptScopeContext scope, string key) => req(scope).GetItem(key);
 
@@ -262,16 +263,26 @@ namespace ServiceStack
         public object getUserSession(ScriptScopeContext scope) => req(scope).GetSession();
         public IAuthSession userSession(ScriptScopeContext scope) => req(scope).GetSession();
         public string userAuthId(ScriptScopeContext scope) => req(scope).GetSession()?.UserAuthId;
-        public string userAuthName(ScriptScopeContext scope) => req(scope).GetSession()?.UserAuthName;
-        
+        public string userAuthName(ScriptScopeContext scope)
+        {
+            var authSession = req(scope).GetSession();
+            return authSession?.UserAuthName ?? authSession?.UserName ?? authSession?.Email;
+        }
+
         public string userProfileUrl(ScriptScopeContext scope) => req(scope).GetSession().GetProfileUrl();
 
         public HashSet<string> userAttributes(ScriptScopeContext scope) => req(scope).GetUserAttributes();
 
         public bool isAuthenticated(ScriptScopeContext scope)
         {
-            var authSession = userSession(scope);
-            return authSession?.IsAuthenticated == true;
+            var request = req(scope);
+            return request != null && AuthenticateAttribute.Authenticate(request, request.GetSession());
+        }
+
+        public bool isAuthenticated(ScriptScopeContext scope, string provider)
+        {
+            var request = req(scope);
+            return request != null && AuthenticateAttribute.Authenticate(request);
         }
 
         public object redirectTo(ScriptScopeContext scope, string path)
@@ -638,6 +649,33 @@ namespace ServiceStack
         public Dictionary<string, string> svgDataUris() => Svg.DataUris;
 
         public Dictionary<string, List<string>> svgCssFiles() => Svg.CssFiles;
+
+        public IgnoreResult svgAdd(string svg, string name)
+        {
+            Svg.AddImage(svg, name);
+            return IgnoreResult.Value;
+        }
+
+        public IgnoreResult svgAdd(string svg, string name, string cssFile)
+        {
+            Svg.AddImage(svg, name, cssFile);
+            return IgnoreResult.Value;
+        }
+
+        public IgnoreResult svgAddFile(ScriptScopeContext scope, string svgPath, string name)
+        {
+            var svg = (scope.Context.VirtualFiles.GetFile(svgPath) ?? throw new FileNotFoundException(svgPath)).ReadAllText();
+            Svg.AddImage(svg, name);
+            return IgnoreResult.Value;
+        }
+
+        public IgnoreResult svgAddFile(ScriptScopeContext scope, string svgPath, string name, string cssFile)
+        {
+            var svgFile = scope.Context.VirtualFiles.GetFile(svgPath) ?? throw new FileNotFoundException(svgPath);
+            var svg = svgFile.ReadAllText();
+            Svg.AddImage(svg, name, cssFile);
+            return IgnoreResult.Value;
+        }
     }
 
     public class SvgScriptBlock : ScriptBlock
@@ -653,14 +691,12 @@ namespace ServiceStack
             var args = argumentStr.SplitOnFirst(' ');
             var name = args[0].Trim();
 
-            using (var ms = MemoryStreamFactory.GetStream())
-            {
-                var useScope = scope.ScopeWithStream(ms);
-                await WriteBodyAsync(useScope, block, token);
+            using var ms = MemoryStreamFactory.GetStream();
+            var useScope = scope.ScopeWithStream(ms);
+            await WriteBodyAsync(useScope, block, token);
 
-                var capturedSvg = ms.ReadToEnd();                
-                Svg.AddImage(capturedSvg, name, args.Length == 2 ? args[1].Trim() : null);
-            }
+            var capturedSvg = await ms.ReadToEndAsync();                
+            Svg.AddImage(capturedSvg, name, args.Length == 2 ? args[1].Trim() : null);
         }
     }
     

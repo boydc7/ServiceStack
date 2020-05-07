@@ -26,11 +26,18 @@ using ServiceStack.Web;
 
 namespace ServiceStack.FluentValidation
 {
+    public class DefaultValidator<T> : AbstractValidator<T> {}
+
+    public interface IServiceStackValidator
+    {
+        void RemovePropertyRules(Func<PropertyRule, bool> where);
+    }
+    
     /// <summary>
     /// Base class for entity validator classes.
     /// </summary>
     /// <typeparam name="T">The type of the object being validated</typeparam>
-    public abstract partial class AbstractValidator<T> : IRequiresRequest
+    public abstract partial class AbstractValidator<T> : IRequiresRequest, IHasTypeValidators, IServiceStackValidator
     {
         /// <summary>
         /// Validators are auto-wired transient instances
@@ -41,7 +48,7 @@ namespace ServiceStack.FluentValidation
             if (appHost == null) //Unit tests or stand-alone usage
                 return;
             
-            if (ServiceStack.Validators.TypeRulesMap.TryGetValue(typeof(T), out var dtoRules))
+            if (ServiceStack.Validators.TypePropertyRulesMap.TryGetValue(typeof(T), out var dtoRules))
             {
                 foreach (var rule in dtoRules)
                 {
@@ -58,6 +65,13 @@ namespace ServiceStack.FluentValidation
                     var typeRules = new List<IValidationRule>();
                     foreach (var entry in sourceRules)
                     {
+                        var isTypeValidator = entry.Key == null;
+                        if (isTypeValidator)
+                        {
+                            ServiceStack.Validators.AddTypeValidator(TypeValidators, entry.Value);
+                            continue;
+                        }
+                        
                         var pi = typeof(T).GetProperty(entry.Key);
                         if (pi != null)
                         {
@@ -76,6 +90,8 @@ namespace ServiceStack.FluentValidation
             }
         }
 
+        public List<ITypeValidator> TypeValidators { get; } = new List<ITypeValidator>();
+
         public virtual IRequest Request { get; set; }
 
         public virtual IServiceGateway Gateway => HostContext.AppHost.GetServiceGateway(Request);
@@ -93,6 +109,22 @@ namespace ServiceStack.FluentValidation
             foreach (var httpMethod in httpMethods)
             {
                 RuleSet(httpMethod, action);
+            }
+        }
+
+        //TODO: [SYNC] Call from AbstractValidator.Validate/ValidateAsync(context)
+        private void Init(ValidationContext context)
+        {
+            if (this.Request == null)
+                this.Request = context.Request;
+        }
+
+        public void RemovePropertyRules(Func<PropertyRule, bool> where)
+        {
+            var rulesToRemove = Rules.OfType<PropertyRule>().Where(where).ToList();
+            foreach (var validationRule in rulesToRemove)
+            {
+                Rules.Remove(validationRule);
             }
         }
     }

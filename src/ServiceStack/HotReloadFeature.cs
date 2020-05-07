@@ -10,8 +10,9 @@ namespace ServiceStack
     /// <summary>
     /// Back-end Service used by /js/hot-fileloader.js to detect file changes in /wwwroot and auto reload page.
     /// </summary>
-    public class HotReloadFeature : IPlugin
+    public class HotReloadFeature : IPlugin, Model.IHasStringId
     {
+        public string Id { get; set; } = Plugins.HotReload;
         public IVirtualPathProvider VirtualFiles
         {
             set => HotReloadFilesService.UseVirtualFiles = value;
@@ -45,6 +46,9 @@ namespace ServiceStack
         public static List<string> ExcludePatterns { get; } = new List<string> {
             "*.sqlite",
             "*.db",
+            "*.ts", //watch on generated .js instead
+            "*.log", //exclude log files
+            "*.csv",
         };
         
         public static TimeSpan LongPollDuration = TimeSpan.FromSeconds(60);

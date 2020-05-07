@@ -18,8 +18,9 @@
         public static string SessionOptionsKey = "ss-opt";
         public static string TokenCookie = "ss-tok";
         public static string ApiKeyParam = "apikey";
-        public static string Redirect = "redirect";
         public static string Continue = "continue";
+        public static string Redirect = "redirect";
+        public static string NoRedirect = "noredirect";
         public static string ReturnUrl = nameof(ReturnUrl); //.NET Core default convention
         public static string AutoBatchIndex = nameof(AutoBatchIndex);
         public static string SoapMessage = nameof(SoapMessage);
@@ -31,8 +32,11 @@
         public const string ApiKey = "__apikey";
         public const string Session = "__session";
         public const string HasPreAuthenticated = "__haspreauth";
+        public const string HasGlobalHeaders = "__global_headers";
         public const string HasLogged = "_logged";
         public const string DidAuthenticate = "__didauth";
+        public const string IgnoreEvent = "__ignoreevent";
+        public const string EventModelId = "__eventmodelid";
         public const string IRequest = "__irequest";
         public const string Attributes = "__attrs";
         public const string RequestDuration = "_requestDurationStopwatch";
@@ -51,7 +55,13 @@
         public const string Id = nameof(Id);
         public const string Result = nameof(Result);
         public const string RowVersion = nameof(RowVersion);
+        public const string Reset = nameof(Reset);
+        public const string reset = nameof(reset);
         public const string Count = nameof(Count);
+        
+        public const string Allows = "allows";
+        public const string Embed = "embed";
+        public const string AccessTokenAuth = "accessTokenAuth";
     }
 
     public static class LocalizedStrings

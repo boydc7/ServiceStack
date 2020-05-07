@@ -14,6 +14,23 @@ namespace ServiceStack
     {
         private static readonly ILog log = LogManager.GetLogger(typeof(AppHostExtensions));
 
+        public static void RegisterServices(this IAppHost appHost, Dictionary<Type, string[]> serviceRoutes)
+        {
+            if (serviceRoutes == null)
+                return;
+            
+            foreach (var registerService in serviceRoutes)
+            {
+                appHost.RegisterService(registerService.Key, registerService.Value);
+            }
+        }
+
+        public static Dictionary<Type, string[]> RemoveService<T>(this Dictionary<Type, string[]> serviceRoutes)
+        {
+            serviceRoutes?.TryRemove(typeof(T), out _);
+            return serviceRoutes;
+        }
+
         public static void RegisterService<TService>(this IAppHost appHost, params string[] atRestPaths)
         {
             appHost.RegisterService(typeof(TService), atRestPaths);
@@ -100,10 +117,8 @@ namespace ServiceStack
             return !ssHost.HasStarted;
         }
 
-        public static string Localize(this string text, IRequest request)
-        {
-            return HostContext.AppHost.ResolveLocalizedString(text, request);
-        }
+        public static string Localize(this string text, IRequest request=null) => 
+            HostContext.AppHost?.ResolveLocalizedString(text, request) ?? text;
 
         public static IAppHost Start(this IAppHost appHost, IEnumerable<string> urlBases)
         {
@@ -120,6 +135,14 @@ namespace ServiceStack
                 plugins.Add(plugin);
             
             return plugins;
+        }
+
+        public static string ResolveStaticBaseUrl(this IAppHost appHost)
+        {
+            return (appHost.Config.WebHostUrl ??
+                (!string.IsNullOrEmpty(appHost.PathBase)
+                    ? "/" + appHost.PathBase
+                    : "")).TrimEnd('/');
         }
     }
 

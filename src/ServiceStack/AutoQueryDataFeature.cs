@@ -8,15 +8,12 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
 using System.Threading;
-
-using Funq;
 using ServiceStack.Caching;
 using ServiceStack.DataAnnotations;
 using ServiceStack.Extensions;
+using ServiceStack.Host;
 using ServiceStack.MiniProfiler;
-using ServiceStack.Reflection;
 using ServiceStack.Web;
-using ServiceStack.Logging;
 using ServiceStack.Text;
 
 namespace ServiceStack
@@ -75,8 +72,9 @@ namespace ServiceStack
         public IQueryResponse Response { get; set; }
     }
 
-    public class AutoQueryDataFeature : IPlugin, IPostInitPlugin
+    public class AutoQueryDataFeature : IPlugin, IPostInitPlugin, Model.IHasStringId
     {
+        public string Id { get; set; } = Plugins.AutoQueryData;
         public HashSet<string> IgnoreProperties { get; set; }
         public HashSet<Assembly> LoadFromAssemblies { get; set; }
         public int? MaxLimit { get; set; }
@@ -278,7 +276,7 @@ namespace ServiceStack
                 if (genericDef == null)
                     continue;
 
-                var method = typeBuilder.DefineMethod("Any", MethodAttributes.Public | MethodAttributes.Virtual,
+                var method = typeBuilder.DefineMethod(ActionContext.AnyMethod, MethodAttributes.Public | MethodAttributes.Virtual,
                     CallingConventions.Standard,
                     returnType: typeof(object),
                     parameterTypes: new[] { requestType });

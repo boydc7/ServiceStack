@@ -7,10 +7,12 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.MiniProfiler;
 using ServiceStack.Web;
 using ServiceStack.Data;
 using ServiceStack.Extensions;
+using ServiceStack.Host;
 using ServiceStack.OrmLite;
 using ServiceStack.Text;
 
@@ -27,25 +29,38 @@ namespace ServiceStack
         public IQueryResponse Response { get; set; }
     }
 
-    public partial class AutoQueryFeature : IPlugin, IPostInitPlugin
+    public partial class AutoQueryFeature : IPlugin, IPostInitPlugin, Model.IHasStringId
     {
-        public HashSet<string> IgnoreProperties { get; set; }
-        public HashSet<string> IllegalSqlFragmentTokens { get; set; }
-        public HashSet<Assembly> LoadFromAssemblies { get; set; } 
+        public string Id { get; set; } = Plugins.AutoQuery;
+        private static readonly string[] DefaultIgnoreProperties = 
+            {"Skip", "Take", "OrderBy", "OrderByDesc", "Fields", "_select", "_from", "_join", "_where"};
+        public HashSet<string> IgnoreProperties { get; set; } = new HashSet<string>(DefaultIgnoreProperties, StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> IllegalSqlFragmentTokens { get; set; } = new HashSet<string>(OrmLiteUtils.IllegalSqlFragmentTokens);
+        public HashSet<Assembly> LoadFromAssemblies { get; set; } = new HashSet<Assembly>();
         public int? MaxLimit { get; set; }
         public bool IncludeTotal { get; set; }
-        public bool StripUpperInLike { get; set; }
-        public bool EnableUntypedQueries { get; set; }
+        public bool StripUpperInLike { get; set; } = OrmLiteConfig.StripUpperInLike;
+        public bool EnableUntypedQueries { get; set; } = true;
         public bool EnableRawSqlFilters { get; set; }
-        public bool EnableAutoQueryViewer { get; set; }
-        public bool OrderByPrimaryKeyOnPagedQuery { get; set; }
+        public bool EnableAutoQueryViewer { get; set; } = true;
+        public bool EnableAsync { get; set; } = true;
+        public bool OrderByPrimaryKeyOnPagedQuery { get; set; } = true;
         public string UseNamedConnection { get; set; }
-        public Type AutoQueryServiceBaseType { get; set; }
+        public Type AutoQueryServiceBaseType { get; set; } = typeof(AutoQueryServiceBase);
         public QueryFilterDelegate GlobalQueryFilter { get; set; }
-        public Dictionary<Type, QueryFilterDelegate> QueryFilters { get; set; }
+        public Dictionary<Type, QueryFilterDelegate> QueryFilters { get; set; } = new Dictionary<Type, QueryFilterDelegate>();
         public List<Action<QueryDbFilterContext>> ResponseFilters { get; set; }
         public Action<Type, TypeBuilder, MethodBuilder, ILGenerator> GenerateServiceFilter { get; set; }
 
+        /// <summary>
+        /// Enable code-gen of CRUD Services for registered database in any supported Add ServiceStack Reference Language:
+        ///  - /autocrud/{Include}/{Lang}
+        /// 
+        /// View DB Schema Services:
+        ///  - /autocrud/schema - Default DB
+        ///  - /autocrud/schema/{Schema} - Specified DB Schema
+        /// </summary>
+        public IGenerateCrudServices GenerateCrudServices { get; set; }
 
         public Dictionary<string, string> ImplicitConventions = new Dictionary<string, string> 
         {
@@ -100,20 +115,24 @@ namespace ServiceStack
             { "EndsWith", new QueryDbFieldAttribute { Template = SqlTemplate.CaseInsensitiveLike, ValueFormat = "%{0}" }},
         };
 
+        public List<AutoQueryConvention> ViewerConventions { get; set; } = new List<AutoQueryConvention> 
+        {
+            new AutoQueryConvention {Name = "=", Value = "%"},
+            new AutoQueryConvention {Name = "!=", Value = "%!"},
+            new AutoQueryConvention {Name = ">=", Value = ">%"},
+            new AutoQueryConvention {Name = ">", Value = "%>"},
+            new AutoQueryConvention {Name = "<=", Value = "%<"},
+            new AutoQueryConvention {Name = "<", Value = "<%"},
+            new AutoQueryConvention {Name = "In", Value = "%In"},
+            new AutoQueryConvention {Name = "Between", Value = "%Between"},
+            new AutoQueryConvention {Name = "Starts With", Value = "%StartsWith", Types = "string"},
+            new AutoQueryConvention {Name = "Contains", Value = "%Contains", Types = "string"},
+            new AutoQueryConvention {Name = "Ends With", Value = "%EndsWith", Types = "string"},
+        };
+
         public AutoQueryFeature()
         {
-            IgnoreProperties = new HashSet<string>(new[] { "Skip", "Take", "OrderBy", "OrderByDesc", "Fields", "_select", "_from", "_join", "_where" }, 
-                StringComparer.OrdinalIgnoreCase);
-            IllegalSqlFragmentTokens = new HashSet<string>(OrmLiteUtils.IllegalSqlFragmentTokens);
-            AutoQueryServiceBaseType = typeof(AutoQueryServiceBase);
-            QueryFilters = new Dictionary<Type, QueryFilterDelegate>();
             ResponseFilters = new List<Action<QueryDbFilterContext>> { IncludeAggregates };
-            IncludeTotal = false;
-            EnableUntypedQueries = true;
-            EnableAutoQueryViewer = true;
-            OrderByPrimaryKeyOnPagedQuery = true;
-            StripUpperInLike = OrmLiteConfig.StripUpperInLike;
-            LoadFromAssemblies = new HashSet<Assembly>();
         }
 
         public void Register(IAppHost appHost)
@@ -141,7 +160,8 @@ namespace ServiceStack
                     EndsWithConventions[key] = query;
             }
 
-            appHost.GetContainer().AddSingleton<IAutoQueryDb>(c => new AutoQuery
+            var container = appHost.GetContainer();
+            container.AddSingleton<IAutoQueryDb>(c => new AutoQuery
                 {
                     IgnoreProperties = IgnoreProperties,
                     IllegalSqlFragmentTokens = IllegalSqlFragmentTokens,
@@ -166,18 +186,45 @@ namespace ServiceStack
                     LoadFromAssemblies.Add(x);
             });
 
+            appHost.AddToAppMetadata(meta => {
+                meta.Plugins.AutoQuery = new AutoQueryInfo {
+                    MaxLimit = MaxLimit,
+                    UntypedQueries = EnableUntypedQueries.NullIfFalse(),
+                    RawSqlFilters = EnableRawSqlFilters.NullIfFalse(),
+                    Async = EnableAsync.NullIfFalse(),
+                    AutoQueryViewer = EnableAutoQueryViewer.NullIfFalse(),
+                    OrderByPrimaryKey = OrderByPrimaryKeyOnPagedQuery.NullIfFalse(),
+                    CrudEvents = container.Exists<ICrudEvents>().NullIfFalse(),
+                    CrudEventsServices = (ServiceRoutes.ContainsKey(typeof(GetCrudEventsService)) && AccessRole != null).NullIfFalse(),
+                    AccessRole = AccessRole,
+                    NamedConnection = UseNamedConnection,
+                    ViewerConventions = ViewerConventions,
+                };
+            });
+
             if (EnableAutoQueryViewer && appHost.GetPlugin<AutoQueryMetadataFeature>() == null)
                 appHost.LoadPlugin(new AutoQueryMetadataFeature { MaxLimit = MaxLimit });
+            
+            appHost.GetPlugin<MetadataFeature>()?.ExportTypes.Add(typeof(CrudEvent));
+            
+            //CRUD Services
+            GenerateCrudServices?.Register(appHost);
+
+            OnRegister(appHost);
         }
 
         public void AfterPluginsLoaded(IAppHost appHost)
         {
-            var scannedTypes = new List<Type>();
+            var scannedTypes = new HashSet<Type>();
+            
+            var crudServices = GenerateCrudServices?.GenerateMissingServices(this);
+            crudServices?.Each(x => scannedTypes.Add(x));
+
             foreach (var assembly in LoadFromAssemblies)
             {
                 try
                 {
-                    scannedTypes.AddRange(assembly.GetTypes());
+                    assembly.GetTypes().Each(x => scannedTypes.Add(x));
                 }
                 catch (Exception ex)
                 {
@@ -199,14 +246,6 @@ namespace ServiceStack
 
             var serviceType = GenerateMissingQueryServices(missingQueryRequestTypes, missingCrudRequestTypes);
             appHost.RegisterService(serviceType);
-        }
-
-        internal static Tuple<Type, Type> GetCrudGenericDefTypes(Type requestType, Type crudType)
-        {
-            var genericDef = requestType.GetTypeWithGenericTypeDefinitionOf(crudType);
-            if (genericDef != null)
-                return Tuple.Create(genericDef, crudType);
-            return null;
         }
 
         Type GenerateMissingQueryServices(
@@ -232,7 +271,7 @@ namespace ServiceStack
                 if (genericDef == null)
                     continue;
 
-                var method = typeBuilder.DefineMethod("Any", MethodAttributes.Public | MethodAttributes.Virtual,
+                var method = typeBuilder.DefineMethod(ActionContext.AnyMethod, MethodAttributes.Public | MethodAttributes.Virtual,
                     CallingConventions.Standard,
                     returnType: typeof(object),
                     parameterTypes: new[] { requestType });
@@ -241,9 +280,13 @@ namespace ServiceStack
 
                 GenerateServiceFilter?.Invoke(requestType, typeBuilder, method, il);
 
+                var queryMethod = EnableAsync
+                    ? nameof(AutoQueryServiceBase.ExecAsync)
+                    : nameof(AutoQueryServiceBase.Exec);
+                
                 var genericArgs = genericDef.GetGenericArguments();
                 var mi = AutoQueryServiceBaseType.GetMethods()
-                    .First(x => x.Name == nameof(AutoQueryServiceBase.Exec) && 
+                    .First(x => x.Name == queryMethod && 
                                 x.GetGenericArguments().Length == genericArgs.Length);
                 var genericMi = mi.MakeGenericMethod(genericArgs);
 
@@ -264,17 +307,13 @@ namespace ServiceStack
                 if (requestType.IsAbstract || requestType.IsGenericType)
                     continue;
                 
-                var crudTypes = GetCrudGenericDefTypes(requestType, typeof(ICreateDb<>))
-                    ?? GetCrudGenericDefTypes(requestType, typeof(IUpdateDb<>))
-                    ?? GetCrudGenericDefTypes(requestType, typeof(IDeleteDb<>))
-                    ?? GetCrudGenericDefTypes(requestType, typeof(IPatchDb<>))
-                    ?? GetCrudGenericDefTypes(requestType, typeof(ISaveDb<>));
+                var crudTypes = AutoCrudOperation.GetAutoCrudDtoType(requestType);
                 
                 if (crudTypes == null)
                     continue;
 
-                var genericDef = crudTypes.Item1;
-                var crudType = crudTypes.Item2;
+                var genericDef = crudTypes.Value.GenericDef;
+                var crudType = crudTypes.Value.ModelType;
                 var methodName = crudType.Name.LeftPart('`').Substring(1);
                 methodName = methodName.Substring(0, methodName.Length - 2);
                 
@@ -282,7 +321,7 @@ namespace ServiceStack
                     !requestType.IsOrHasGenericInterfaceTypeOf(typeof(IReturn<>)))
                     throw new NotSupportedException($"'{requestType.Name}' I{methodName}Db<T> AutoQuery Service must implement IReturn<T> or IReturnVoid");
                 
-                var method = typeBuilder.DefineMethod("Any", MethodAttributes.Public | MethodAttributes.Virtual,
+                var method = typeBuilder.DefineMethod(ActionContext.AnyMethod, MethodAttributes.Public | MethodAttributes.Virtual,
                     CallingConventions.Standard,
                     returnType: typeof(object),
                     parameterTypes: new[] { requestType });
@@ -291,9 +330,13 @@ namespace ServiceStack
 
                 GenerateServiceFilter?.Invoke(requestType, typeBuilder, method, il);
 
+                var crudMethod = EnableAsync
+                    ? methodName + "Async"
+                    : methodName;
+                
                 var genericArgs = genericDef.GetGenericArguments();
                 var mi = AutoQueryServiceBaseType.GetMethods()
-                    .First(x => x.Name == methodName && 
+                    .First(x => x.Name == crudMethod && 
                            x.GetGenericArguments().Length == genericArgs.Length);
                 var genericMi = mi.MakeGenericMethod(genericArgs);
 
@@ -412,7 +455,7 @@ namespace ServiceStack
         }
     }
 
-    public interface IAutoQueryDb
+    public interface IAutoQueryDb : IAutoCrudDb
     {
         Type GetFromType(Type requestDtoType);
         IDbConnection GetDb(Type fromType, IRequest req = null);
@@ -424,15 +467,80 @@ namespace ServiceStack
 
         QueryResponse<From> Execute<From>(IQueryDb<From> model, SqlExpression<From> query, IRequest req = null, IDbConnection db = null);
 
+        Task<QueryResponse<From>> ExecuteAsync<From>(IQueryDb<From> model, SqlExpression<From> query, IRequest req = null, IDbConnection db = null);
+
         SqlExpression<From> CreateQuery<From, Into>(IQueryDb<From, Into> dto, Dictionary<string, string> dynamicParams, IRequest req = null, IDbConnection db = null);
 
         QueryResponse<Into> Execute<From, Into>(IQueryDb<From, Into> model, SqlExpression<From> query, IRequest req = null, IDbConnection db = null);
+
+        Task<QueryResponse<Into>> ExecuteAsync<From, Into>(IQueryDb<From, Into> model, SqlExpression<From> query, IRequest req = null, IDbConnection db = null);
         
         ISqlExpression CreateQuery(IQueryDb dto, Dictionary<string, string> dynamicParams, IRequest req, IDbConnection db);
 
+        /// <summary>
+        /// Execute an AutoQuery Request 
+        /// </summary>
         IQueryResponse Execute(IQueryDb request, ISqlExpression q, IDbConnection db);
+
+        /// <summary>
+        /// Execute an AutoQuery Request 
+        /// </summary>
+        Task<IQueryResponse> ExecuteAsync(IQueryDb request, ISqlExpression q, IDbConnection db);
     }
 
+    public interface IAutoCrudDb
+    {
+        /// <summary>
+        /// Inserts new entry into Table
+        /// </summary>
+        object Create<Table>(ICreateDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Inserts new entry into Table Async
+        /// </summary>
+        Task<object> CreateAsync<Table>(ICreateDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Updates entry into Table
+        /// </summary>
+        object Update<Table>(IUpdateDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Updates entry into Table Async
+        /// </summary>
+        Task<object> UpdateAsync<Table>(IUpdateDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Partially Updates entry into Table (Uses OrmLite UpdateNonDefaults behavior)
+        /// </summary>
+        object Patch<Table>(IPatchDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Partially Updates entry into Table Async (Uses OrmLite UpdateNonDefaults behavior)
+        /// </summary>
+        Task<object> PatchAsync<Table>(IPatchDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Deletes entry from Table
+        /// </summary>
+        object Delete<Table>(IDeleteDb<Table> dto, IRequest req);
+        
+        /// <summary>
+        /// Deletes entry from Table Async
+        /// </summary>
+        Task<object> DeleteAsync<Table>(IDeleteDb<Table> dto, IRequest req);
+
+        /// <summary>
+        /// Inserts or Updates entry into Table
+        /// </summary>
+        object Save<Table>(ISaveDb<Table> dto, IRequest req);
+
+        /// <summary>
+        /// Inserts or Updates entry into Table Async
+        /// </summary>
+        Task<object> SaveAsync<Table>(ISaveDb<Table> dto, IRequest req);
+    }
+    
     public abstract partial class AutoQueryServiceBase : Service
     {
         public IAutoQueryDb AutoQuery { get; set; }
@@ -454,6 +562,23 @@ namespace ServiceStack
             }
         }
 
+        public virtual async Task<object> ExecAsync<From>(IQueryDb<From> dto)
+        {
+            SqlExpression<From> q;
+            using var db = AutoQuery.GetDb<From>(Request);
+            using (Profiler.Current.Step("AutoQuery.CreateQuery"))
+            {
+                var reqParams = Request.IsInProcessRequest()
+                    ? new Dictionary<string, string>()
+                    : Request.GetRequestParams();
+                q = AutoQuery.CreateQuery(dto, reqParams, Request, db);
+            }
+            using (Profiler.Current.Step("AutoQuery.Execute"))
+            {
+                return await AutoQuery.ExecuteAsync(dto, q, db);
+            }
+        }
+
         public virtual object Exec<From, Into>(IQueryDb<From, Into> dto)
         {
             SqlExpression<From> q;
@@ -468,6 +593,23 @@ namespace ServiceStack
             using (Profiler.Current.Step("AutoQuery.Execute"))
             {
                 return AutoQuery.Execute(dto, q, db);
+            }
+        }
+
+        public virtual async Task<object> ExecAsync<From, Into>(IQueryDb<From, Into> dto)
+        {
+            SqlExpression<From> q;
+            using var db = AutoQuery.GetDb<From>(Request);
+            using (Profiler.Current.Step("AutoQuery.CreateQuery"))
+            {
+                var reqParams = Request.IsInProcessRequest()
+                    ? new Dictionary<string, string>()
+                    : Request.GetRequestParams();
+                q = AutoQuery.CreateQuery(dto, reqParams, Request, db);
+            }
+            using (Profiler.Current.Step("AutoQuery.Execute"))
+            {
+                return await AutoQuery.ExecuteAsync(dto, q, db);
             }
         }
     }
@@ -485,7 +627,7 @@ namespace ServiceStack
         Dictionary<string, QueryDbFieldAttribute> EndsWithConventions { get; set; }
     }
 
-    public class AutoQuery : IAutoQueryDb, IAutoQueryOptions
+    public partial class AutoQuery : IAutoQueryDb, IAutoQueryOptions
     {
         public int? MaxLimit { get; set; }
         public bool IncludeTotal { get; set; }
@@ -678,6 +820,15 @@ namespace ServiceStack
             }
         }
 
+        public async Task<QueryResponse<From>> ExecuteAsync<From>(IQueryDb<From> model, SqlExpression<From> query, IRequest req = null, IDbConnection db = null)
+        {
+            using (db == null ? db = GetDb<From>(req) : null)
+            {
+                var typedQuery = GetTypedQuery(model.GetType(), typeof(From));
+                return ResponseFilter(db, await typedQuery.ExecuteAsync<From>(db, query), query, model);
+            }
+        }
+
         public SqlExpression<From> CreateQuery<From, Into>(IQueryDb<From, Into> dto, Dictionary<string, string> dynamicParams, IRequest req = null, IDbConnection db = null)
         {
             using (db == null ? db = GetDb<From>(req) : null)
@@ -694,6 +845,15 @@ namespace ServiceStack
             {
                 var typedQuery = GetTypedQuery(model.GetType(), typeof(From));
                 return ResponseFilter(db, typedQuery.Execute<Into>(db, query), query, model);
+            }
+        }
+
+        public async Task<QueryResponse<Into>> ExecuteAsync<From, Into>(IQueryDb<From, Into> model, SqlExpression<From> query, IRequest req = null, IDbConnection db = null)
+        {
+            using (db == null ? db = GetDb<From>(req) : null)
+            {
+                var typedQuery = GetTypedQuery(model.GetType(), typeof(From));
+                return ResponseFilter(db, await typedQuery.ExecuteAsync<Into>(db, query), query, model);
             }
         }
 
@@ -718,8 +878,53 @@ namespace ServiceStack
             
             var requestDtoType = request.GetType();
             
-            Type fromType;
-            Type intoType;
+            ResolveTypes(requestDtoType, out var fromType, out var intoType);
+
+            if (genericAutoQueryCache.TryGetValue(fromType, out GenericAutoQueryDb typedApi))
+                return typedApi.ExecuteObject(this, request, q, db);
+
+            var instance = GetGenericAutoQueryDb(fromType, intoType, requestDtoType);
+
+            return instance.ExecuteObject(this, request, q, db);
+        }
+
+        public Task<IQueryResponse> ExecuteAsync(IQueryDb request, ISqlExpression q, IDbConnection db)
+        {
+            if (db == null)
+                throw new ArgumentNullException(nameof(db));
+            
+            var requestDtoType = request.GetType();
+            
+            ResolveTypes(requestDtoType, out var fromType, out var intoType);
+
+            if (genericAutoQueryCache.TryGetValue(fromType, out GenericAutoQueryDb typedApi))
+                return typedApi.ExecuteObjectAsync(this, request, q, db);
+
+            var instance = GetGenericAutoQueryDb(fromType, intoType, requestDtoType);
+
+            return instance.ExecuteObjectAsync(this, request, q, db);
+        }
+
+        private GenericAutoQueryDb GetGenericAutoQueryDb(Type fromType, Type intoType, Type requestDtoType)
+        {
+            var genericType = typeof(GenericAutoQueryDb<,>).MakeGenericType(fromType, intoType);
+            var instance = genericType.CreateInstance<GenericAutoQueryDb>();
+
+            Dictionary<Type, GenericAutoQueryDb> snapshot, newCache;
+            do
+            {
+                snapshot = genericAutoQueryCache;
+                newCache = new Dictionary<Type, GenericAutoQueryDb>(genericAutoQueryCache) {
+                    [requestDtoType] = instance
+                };
+            } while (!ReferenceEquals(
+                Interlocked.CompareExchange(ref genericAutoQueryCache, newCache, snapshot), snapshot));
+
+            return instance;
+        }
+
+        private static void ResolveTypes(Type requestDtoType, out Type fromType, out Type intoType)
+        {
             var intoTypeDef = requestDtoType.GetTypeWithGenericTypeDefinitionOf(typeof(IQueryDb<,>));
             if (intoTypeDef != null)
             {
@@ -734,32 +939,14 @@ namespace ServiceStack
                 fromType = args[0];
                 intoType = args[0];
             }
-
-            if (genericAutoQueryCache.TryGetValue(fromType, out GenericAutoQueryDb typedApi))
-                return typedApi.ExecuteObject(this, request, q, db);
-
-            var genericType = typeof(GenericAutoQueryDb<,>).MakeGenericType(fromType, intoType);
-            var instance = genericType.CreateInstance<GenericAutoQueryDb>();
-            
-            Dictionary<Type, GenericAutoQueryDb> snapshot, newCache;
-            do
-            {
-                snapshot = genericAutoQueryCache;
-                newCache = new Dictionary<Type, GenericAutoQueryDb>(genericAutoQueryCache)
-                {
-                    [requestDtoType] = instance
-                };
-
-            } while (!ReferenceEquals(
-                Interlocked.CompareExchange(ref genericAutoQueryCache, newCache, snapshot), snapshot));
-
-            return instance.ExecuteObject(this, request, q, db);
         }
     }
 
     internal abstract class GenericAutoQueryDb
     {
         public abstract IQueryResponse ExecuteObject(AutoQuery autoQuery, IQueryDb request, ISqlExpression query, IDbConnection db = null);
+
+        public abstract Task<IQueryResponse> ExecuteObjectAsync(AutoQuery autoQuery, IQueryDb request, ISqlExpression query, IDbConnection db = null);
     }
     
     internal class GenericAutoQueryDb<From, Into> : GenericAutoQueryDb
@@ -771,6 +958,16 @@ namespace ServiceStack
                 var typedQuery = autoQuery.GetTypedQuery(request.GetType(), typeof(From));
                 var q = (SqlExpression<From>)query;
                 return autoQuery.ResponseFilter(db, typedQuery.Execute<Into>(db, q), q, request);
+            }
+        }
+
+        public override async Task<IQueryResponse> ExecuteObjectAsync(AutoQuery autoQuery, IQueryDb request, ISqlExpression query, IDbConnection db = null)
+        {
+            using (db == null ? autoQuery.GetDb(request.GetType(), null) : null)
+            {
+                var typedQuery = autoQuery.GetTypedQuery(request.GetType(), typeof(From));
+                var q = (SqlExpression<From>)query;
+                return autoQuery.ResponseFilter(db, await typedQuery.ExecuteAsync<Into>(db, q), q, request);
             }
         }
     }
@@ -787,6 +984,10 @@ namespace ServiceStack
             IRequest req = null);
 
         QueryResponse<Into> Execute<Into>(
+            IDbConnection db,
+            ISqlExpression query);
+
+        Task<QueryResponse<Into>> ExecuteAsync<Into>(
             IDbConnection db,
             ISqlExpression query);
     }
@@ -1270,10 +1471,32 @@ namespace ServiceStack
             {
                 var q = (SqlExpression<From>)query;
 
+                var include = q.OnlyFields;
                 var response = new QueryResponse<Into>
                 {
                     Offset = q.Offset.GetValueOrDefault(0),
-                    Results = db.LoadSelect<Into, From>(q, include:q.OnlyFields),
+                    Results = db.LoadSelect<Into, From>(q, include:include),
+                };
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException(ex.Message, ex);
+            }
+        }
+
+        public async Task<QueryResponse<Into>> ExecuteAsync<Into>(IDbConnection db, ISqlExpression query)
+        {
+            try
+            {
+                var q = (SqlExpression<From>)query;
+
+                var include = q.OnlyFields;
+                var response = new QueryResponse<Into>
+                {
+                    Offset = q.Offset.GetValueOrDefault(0),
+                    Results = await db.LoadSelectAsync<Into, From>(q, include:include),
                 };
 
                 return response;

@@ -16,10 +16,13 @@ using ServiceStack.Auth;
 using ServiceStack.Caching;
 using ServiceStack.Configuration;
 using ServiceStack.DataAnnotations;
+using ServiceStack.FluentValidation.Validators;
 using ServiceStack.Host;
 using ServiceStack.Logging;
 using ServiceStack.Mvc;
+using ServiceStack.NativeTypes.CSharp;
 using ServiceStack.NativeTypes.TypeScript;
+using ServiceStack.Script;
 using ServiceStack.Text;
 using ServiceStack.Validation;
 using ServiceStack.Web;
@@ -137,7 +140,9 @@ namespace CheckWebCore
             Plugins.Add(new GrpcFeature(App));
             
             // enable server-side rendering, see: https://sharpscript.net
-            Plugins.Add(new SharpPagesFeature()); 
+            Plugins.Add(new SharpPagesFeature {
+                ScriptMethods = { new CustomScriptMethods() }
+            }); 
             
             Plugins.Add(new LispReplTcpServer {
 //                RequireAuthSecret = true,
@@ -182,19 +187,31 @@ namespace CheckWebCore
                 });
             
 
-//            TypeScriptGenerator.TypeFilter = (type, args) => {
-//                if (type == "ResponseBase`1" && args[0] == "Dictionary<String,List`1>")
-//                    return "ResponseBase<Map<string,Array<any>>>";
-//                return null;
-//            };
+            CSharpGenerator.TypeFilter = (type, args) => {
+                if (type == "ResponseBase`1" && args[0] == "Dictionary<String,List`1>")
+                    return "ResponseBase<Dictionary<string,List<object>>>";
+                return null;
+            };
 
-//            TypeScriptGenerator.DeclarationTypeFilter = (type, args) => {
-//                return null;
-//            };
+            TypeScriptGenerator.TypeFilter = (type, args) => {
+                if (type == "ResponseBase`1" && args[0] == "Dictionary<String,List`1>")
+                    return "ResponseBase<Map<string,Array<any>>>";
+                return null;
+            };
+
+            TypeScriptGenerator.DeclarationTypeFilter = (type, args) => {
+                return null;
+            };
 
 
             //GetPlugin<SvgFeature>().ValidateFn = req => Config.DebugMode; // only allow in DebugMode
         }
+    }
+
+    public class CustomScriptMethods : ScriptMethods
+    {
+        public ITypeValidator CustomTypeValidator(string arg) => null;
+        public IPropertyValidator CustomPropertyValidator(string arg) => null;
     }
     
     [Exclude(Feature.Metadata)]
@@ -331,6 +348,46 @@ namespace CheckWebCore
         public string Type { get; set; }
     }
     
+    [ValidateIsAuthenticated]
+    [ValidateIsAdmin]
+    [ValidateHasRole("TheRole")]
+    [ValidateHasPermission("ThePerm")]
+    public class TriggerAllValidators 
+        : IReturn<IdResponse>
+    {
+        [ValidateCreditCard]
+        public string CreditCard { get; set; }
+        [ValidateEmail]
+        public string Email { get; set; }
+        [ValidateEmpty]
+        public string Empty { get; set; }
+        [ValidateEqual("Equal")]
+        public string Equal { get; set; }
+        [ValidateExclusiveBetween(10, 20)]
+        public int ExclusiveBetween { get; set; }
+        [ValidateGreaterThanOrEqual(10)]
+        public int GreaterThanOrEqual { get; set; }
+        [ValidateGreaterThan(10)]
+        public int GreaterThan { get; set; }
+        [ValidateInclusiveBetween(10, 20)]
+        public int InclusiveBetween { get; set; }
+        [ValidateExactLength(10)]
+        public string Length { get; set; }
+        [ValidateLessThanOrEqual(10)]
+        public int LessThanOrEqual { get; set; }
+        [ValidateLessThan(10)]
+        public int LessThan { get; set; }
+        [ValidateNotEmpty]
+        public string NotEmpty { get; set; }
+        [ValidateNotEqual("NotEqual")]
+        public string NotEqual { get; set; }
+        [ValidateNull]
+        public string Null { get; set; }
+        [ValidateRegularExpression("^[a-z]*$")]
+        public string RegularExpression { get; set; }
+        [ValidateScalePrecision(1,1)]
+        public decimal ScalePrecision { get; set; }
+    }
 
     //    [Authenticate]
     public class MyServices : Service
@@ -352,12 +409,14 @@ namespace CheckWebCore
 
         public object Any(TestAuth request) => request;
 
-        [Authenticate]
-        public object Any(Session request) => SessionAs<AuthUserSession>();
+        // [Authenticate]
+        // public object Any(Session request) => SessionAs<AuthUserSession>();
 
         public object Any(Throw request) => HttpError.Conflict("Conflict message");
 //        public object Any(Throw request) => new HttpResult
 //            {StatusCode = HttpStatusCode.Conflict, Response = "Error message"};
+
+        public object Any(TriggerAllValidators request) => new IdResponse();
 
         [Authenticate]
         public object Post(ImportData request)

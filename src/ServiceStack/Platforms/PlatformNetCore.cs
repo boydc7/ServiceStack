@@ -1,10 +1,7 @@
 ﻿#if NETSTANDARD2_1
 
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Reflection;
-using ServiceStack.Web;
 
 namespace System.Threading
 {
