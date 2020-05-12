@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.Serialization;
 using System.Threading;
+using System.Threading.Tasks;
 using ServiceStack.Caching;
 using ServiceStack.DataAnnotations;
 using ServiceStack.Extensions;
@@ -48,6 +49,7 @@ namespace ServiceStack
     {
         IDataQuery From<T>();
         List<Into> LoadSelect<Into, From>(IDataQuery q);
+        Task<List<Into>> LoadSelectAsync<Into, From>(IDataQuery q);
         int Count(IDataQuery q);
 
         object SelectAggregate(IDataQuery q, string name, IEnumerable<string> args);
@@ -608,7 +610,7 @@ namespace ServiceStack
         Type GetFromType(Type requestDtoType);
         IQueryDataSource GetDb(QueryDataContext ctx, Type type);
         IQueryDataSource GetDb<From>(QueryDataContext ctx);
-        
+
         ITypedQueryData GetTypedQuery(Type requestDtoType, Type fromType);
 
         DataQuery<From> CreateQuery<From>(IQueryData<From> dto, Dictionary<string, string> dynamicParams, IRequest req = null, IQueryDataSource db = null);
@@ -618,6 +620,9 @@ namespace ServiceStack
         DataQuery<From> CreateQuery<From, Into>(IQueryData<From, Into> dto, Dictionary<string, string> dynamicParams, IRequest req = null, IQueryDataSource db = null);
 
         QueryResponse<Into> Execute<From, Into>(IQueryData<From, Into> request, DataQuery<From> q, IRequest req = null, IQueryDataSource db = null);
+
+        Task<QueryResponse<From>> ExecuteAsync<From>(IQueryData<From> dto, DataQuery<From> q, IRequest req = null,
+            IQueryDataSource db = null);
 
         QueryDataContext CreateContext(IQueryData requestDto, Dictionary<string, string> dynamicParams, IRequest req);
         
@@ -864,6 +869,19 @@ namespace ServiceStack
             }
         }
 
+        public async Task<QueryResponse<From>> ExecuteAsync<From>(IQueryData<From> dto, DataQuery<From> q, IRequest req = null, IQueryDataSource db = null)
+        {
+            if (db == null && req == null)
+                throw new ArgumentNullException(nameof(req));
+
+            using (db == null ? db = GetDb<From>(new QueryDataContext {Dto = dto, Request = req}) : null)
+            {
+                var typedQuery = GetTypedQuery(dto.GetType(), typeof(From));
+                var response = await typedQuery.ExecuteAsync<From>(db, q).ConfigureAwait(false);
+                return ResponseFilter(db, response, q, dto);
+            }
+        }
+
         public DataQuery<From> CreateQuery<From, Into>(IQueryData<From, Into> dto, Dictionary<string, string> dynamicParams, IRequest req = null, IQueryDataSource db = null)
         {
             if (db == null && req == null)
@@ -996,6 +1014,11 @@ namespace ServiceStack
         {
             return Data;
         }
+
+        public override Task<IEnumerable<T>> GetDataSourceAsync(IDataQuery q)
+        {
+            return Task.FromResult(Data);
+        }
     }
 
     public abstract class QueryDataSource<T> : IQueryDataSource<T>
@@ -1013,6 +1036,7 @@ namespace ServiceStack
         }
 
         public abstract IEnumerable<T> GetDataSource(IDataQuery q);
+        public abstract Task<IEnumerable<T>> GetDataSourceAsync(IDataQuery q);
 
         public virtual IEnumerable<T> ApplyConditions(IEnumerable<T> data, IEnumerable<DataConditionExpression> conditions)
         {
@@ -1032,6 +1056,19 @@ namespace ServiceStack
         public virtual List<Into> LoadSelect<Into, From>(IDataQuery q)
         {
             var data = GetDataSource(q);
+
+            return DoSelectLoadedInto<Into, From>(q, data);
+        }
+
+        public virtual async Task<List<Into>> LoadSelectAsync<Into, From>(IDataQuery q)
+        {
+            var data = await GetDataSourceAsync(q).ConfigureAwait(false);
+
+            return DoSelectLoadedInto<Into, From>(q, data);
+        }
+
+        private List<Into> DoSelectLoadedInto<Into, From>(IDataQuery q, IEnumerable<T> data)
+        {
             var source = ApplyConditions(data, q.Conditions);
             source = ApplySorting(source, q.OrderBy);
             source = ApplyLimits(source, q.Offset, q.Rows);
@@ -1073,6 +1110,7 @@ namespace ServiceStack
 
             return to;
         }
+
 
         public virtual IEnumerable<T> ApplySorting(IEnumerable<T> source, OrderByExpression orderBy)
         {
@@ -1184,6 +1222,8 @@ namespace ServiceStack
         QueryResponse<Into> Execute<Into>(
             IQueryDataSource db,
             IDataQuery query);
+
+        Task<QueryResponse<Into>> ExecuteAsync<Into>(IQueryDataSource db, IDataQuery query);
     }
 
     public class QueryDataField
@@ -1502,6 +1542,26 @@ namespace ServiceStack
                 {
                     Offset = q.Offset.GetValueOrDefault(0),
                     Results = db.LoadSelect<Into, From>(q),
+                };
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException(ex.Message, ex);
+            }
+        }
+
+        public async Task<QueryResponse<Into>> ExecuteAsync<Into>(IQueryDataSource db, IDataQuery query)
+        {
+            try
+            {
+                var q = (DataQuery<From>)query;
+
+                var response = new QueryResponse<Into>
+                {
+                    Offset = q.Offset.GetValueOrDefault(0),
+                    Results = await db.LoadSelectAsync<Into, From>(q).ConfigureAwait(false),
                 };
 
                 return response;
