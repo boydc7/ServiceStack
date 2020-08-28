@@ -1,4 +1,5 @@
-﻿using ServiceStack.Redis;
+﻿using System.Threading.Tasks;
+using ServiceStack.Redis;
 
 namespace ServiceStack
 {
@@ -11,22 +12,36 @@ namespace ServiceStack
             this.redisManager = redisManager;
         }
 
-        public void InitSchema() {}
+        public void InitSchema() { }
 
         public long Increment(string key, long amount = 1)
         {
-            using (var redis = redisManager.GetClient())
+            using(var redis = redisManager.GetClient())
             {
                 return redis.IncrementValueBy("seq:" + key, amount);
             }
         }
 
+        public Task<long> IncrementAsync(string key, long amount = 1)
+        {
+            var result = Increment(key, amount);
+
+            return Task.FromResult(result);
+        }
+
         public void Reset(string key, long startingAt = 0)
         {
-            using (var redis = redisManager.GetClient())
+            using(var redis = redisManager.GetClient())
             {
                 redis.IncrementValueBy("seq:" + key, startingAt);
             }
+        }
+
+        public Task ResetAsync(string key, long startingAt = 0)
+        {
+            Reset(key, startingAt);
+
+            return Task.CompletedTask;
         }
     }
 }
