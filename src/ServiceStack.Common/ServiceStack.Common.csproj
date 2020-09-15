@@ -15,7 +15,7 @@
     <PackageReference Include="System.Reflection.TypeExtensions" Version="4.7.0" />
     <ProjectReference Include="..\..\..\ServiceStack.Text\src\ServiceStack.Text\ServiceStack.Text.csproj" />
     <ProjectReference Include="..\ServiceStack.Interfaces\ServiceStack.Interfaces.csproj" />
-    <PackageReference Include="ServiceStack.Text" Version="$(Version)" />
+    <PackageReference Include="ServiceStack.Text" Version="5.9.2" />
   </ItemGroup>
   <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard2.1' ">
     <PackageReference Include="System.Dynamic.Runtime" Version="4.3.0" />
